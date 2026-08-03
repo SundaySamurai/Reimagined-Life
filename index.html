@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vehicle Maintenance Tracker</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --text: #1a2530;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --accent: #2563eb;
+    --accent-dark: #1d4ed8;
+    --ok: #16a34a;
+    --ok-bg: #dcfce7;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --bad: #dc2626;
+    --bad-bg: #fee2e2;
+    --warranty: #7c3aed;
+    --warranty-bg: #ede9fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1720;
+      --card: #1a2530;
+      --text: #e5edf5;
+      --muted: #94a3b8;
+      --border: #2b3946;
+      --accent: #3b82f6;
+      --accent-dark: #60a5fa;
+      --ok: #4ade80;
+      --ok-bg: #14301f;
+      --warn: #fbbf24;
+      --warn-bg: #3a2e0d;
+      --bad: #f87171;
+      --bad-bg: #3a1414;
+      --warranty: #a78bfa;
+      --warranty-bg: #2c1f47;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { margin: 0; font-size: 1.4rem; }
+  header .sub { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+  .container { max-width: 960px; margin: 0 auto; padding: 20px 16px 80px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
+  button, .btn {
+    font: inherit;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 8px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+  button.primary:hover { background: var(--accent-dark); }
+  button.danger { color: var(--bad); }
+  button.small { padding: 4px 10px; font-size: 0.8rem; }
+  a.btn { text-decoration: none; display: inline-block; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .vehicle-card { cursor: pointer; }
+  .vehicle-card:hover { border-color: var(--accent); }
+  .vehicle-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .vehicle-head h2 { margin: 0 0 4px; font-size: 1.15rem; }
+  .vehicle-meta { color: var(--muted); font-size: 0.85rem; }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .badge {
+    font-size: 0.75rem;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.warranty { background: var(--warranty-bg); color: var(--warranty); }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 50px 20px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 140px; }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; margin-top: 10px; }
+  input, select, textarea {
+    width: 100%;
+    font: inherit;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  textarea { resize: vertical; min-height: 50px; }
+  dialog {
+    border: none;
+    border-radius: 14px;
+    padding: 0;
+    background: var(--card);
+    color: var(--text);
+    max-width: 520px;
+    width: 92vw;
+    max-height: 88vh;
+    overflow: auto;
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.5); }
+  .dialog-inner { padding: 20px 22px; }
+  .dialog-inner h3 { margin-top: 0; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .item-row:last-child { border-bottom: none; }
+  .item-name { font-weight: 600; }
+  .item-detail { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+  .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .warranty-note {
+    background: var(--warranty-bg);
+    color: var(--warranty);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    margin-top: 6px;
+  }
+  .back-link { color: var(--accent); cursor: pointer; font-size: 0.9rem; margin-bottom: 14px; display: inline-block; }
+  .section-title { display: flex; justify-content: space-between; align-items: center; margin: 26px 0 10px; }
+  .section-title h3 { margin: 0; }
+  .checklist { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .checklist label {
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 0.82rem; color: var(--text); margin: 0;
+    width: auto;
+  }
+  .checklist input { width: auto; }
+  footer.hint { text-align: center; color: var(--muted); font-size: 0.78rem; margin-top: 30px; }
+  .stat-strip { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .stat { font-size: 0.8rem; color: var(--muted); }
+  .stat b { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🚗 Vehicle Maintenance Tracker</h1>
+    <div class="sub">Track services, stay ahead of what's due, use your warranty before it lapses.</div>
+  </div>
+  <div class="toolbar">
+    <button id="exportBtn" class="small" title="Backup your data as a JSON file">Export data</button>
+    <button id="importBtn" class="small" title="Restore data from a JSON backup">Import data</button>
+    <input type="file" id="importFile" accept="application/json" style="display:none" />
+  </div>
+</header>
+
+<div class="container" id="app"></div>
+
+<dialog id="dialog"></dialog>
+
+<script>
+/* ---------------- Data layer ---------------- */
+const STORAGE_KEY = "vehicleMaintenanceTracker.v1";
+
+const DEFAULT_MAINTENANCE_TEMPLATES = [
+  { name: "Oil & filter change", intervalMiles: 5000, intervalMonths: 6 },
+  { name: "Tire rotation", intervalMiles: 6000, intervalMonths: 6 },
+  { name: "Brake inspection", intervalMiles: 10000, intervalMonths: 12 },
+  { name: "Air filter replacement", intervalMiles: 20000, intervalMonths: 12 },
+  { name: "Cabin air filter", intervalMiles: 20000, intervalMonths: 12 },
+  { name: "Battery check", intervalMiles: null, intervalMonths: 12 },
+  { name: "Wiper blades", intervalMiles: null, intervalMonths: 12 },
+  { name: "Coolant flush", intervalMiles: 30000, intervalMonths: 30 },
+  { name: "Transmission fluid", intervalMiles: 45000, intervalMonths: 36 },
+  { name: "Spark plugs", intervalMiles: 60000, intervalMonths: null },
+  { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
+];
+
+function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { console.error("Failed to load data", e); }
+  return { vehicles: [] };
+}
+function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+let state = loadData();
+let currentVehicleId = null;
+
+/* ---------------- Date/mileage math ---------------- */
+function addMonths(iso, months) {
+  const d = new Date(iso + "T00:00:00");
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+function daysBetween(iso) {
+  const d = new Date(iso + "T00:00:00");
+  const now = new Date(todayISO() + "T00:00:00");
+  return Math.round((d - now) / 86400000);
+}
+
+const DUE_SOON_MILES = 500;
+const DUE_SOON_DAYS = 30;
+
+function computeItemStatus(item, vehicle) {
+  let nextDueMiles = null, nextDueDate = null;
+  if (item.intervalMiles) nextDueMiles = (item.lastServiceMileage ?? vehicle.mileage) + item.intervalMiles;
+  if (item.intervalMonths) nextDueDate = addMonths(item.lastServiceDate || vehicle.createdAt, item.intervalMonths);
+
+  const milesRemaining = nextDueMiles !== null ? nextDueMiles - vehicle.mileage : null;
+  const daysRemaining = nextDueDate !== null ? daysBetween(nextDueDate) : null;
+
+  let status = "ok";
+  if ((milesRemaining !== null && milesRemaining <= 0) || (daysRemaining !== null && daysRemaining <= 0)) {
+    status = "bad";
+  } else if ((milesRemaining !== null && milesRemaining <= DUE_SOON_MILES) || (daysRemaining !== null && daysRemaining <= DUE_SOON_DAYS)) {
+    status = "warn";
+  }
+  return { nextDueMiles, nextDueDate, milesRemaining, daysRemaining, status };
+}
+
+function warrantyStatus(w, vehicle) {
+  let expiredByDate = false, expiredByMiles = false;
+  if (w.durationMonths) {
+    const end = addMonths(w.startDate, w.durationMonths);
+    expiredByDate = daysBetween(end) < 0;
+  }
+  if (w.mileageLimit) {
+    expiredByMiles = vehicle.mileage > w.mileageLimit;
+  }
+  const active = !expiredByDate && !expiredByMiles && daysBetween(w.startDate) <= 0;
+  return { active, expiredByDate, expiredByMiles };
+}
+
+/* ---------------- Rendering ---------------- */
+const app = document.getElementById("app");
+
+function render() {
+  if (currentVehicleId) {
+    const v = state.vehicles.find(v => v.id === currentVehicleId);
+    if (v) return renderVehicleDetail(v);
+    currentVehicleId = null;
+  }
+  renderDashboard();
+}
+
+function overallVehicleBadges(v) {
+  const badges = [];
+  let worst = "ok", warrantyFlag = false;
+  (v.maintenanceItems || []).forEach(item => {
+    const s = computeItemStatus(item, v).status;
+    if (s === "bad") worst = "bad";
+    else if (s === "warn" && worst !== "bad") worst = "warn";
+  });
+  (v.warranties || []).forEach(w => { if (warrantyStatus(w, v).active) warrantyFlag = true; });
+  if (worst === "bad") badges.push(["bad", "Overdue service"]);
+  else if (worst === "warn") badges.push(["warn", "Service due soon"]);
+  else badges.push(["ok", "Up to date"]);
+  if (warrantyFlag) badges.push(["warranty", "Active warranty"]);
+  return badges;
+}
+
+function renderDashboard() {
+  let html = "";
+  if (state.vehicles.length === 0) {
+    html += `<div class="empty card">
+      <p>No vehicles yet. Add your first one to start tracking maintenance.</p>
+      <button class="primary" onclick="openVehicleForm()">+ Add a vehicle</button>
+    </div>`;
+  } else {
+    html += `<div class="toolbar" style="margin-bottom:16px;">
+      <button class="primary" onclick="openVehicleForm()">+ Add vehicle</button>
+    </div>`;
+    state.vehicles.forEach(v => {
+      const badges = overallVehicleBadges(v);
+      html += `<div class="card vehicle-card" onclick="openVehicle('${v.id}')">
+        <div class="vehicle-head">
+          <div>
+            <h2>${escapeHtml(v.nickname)}</h2>
+            <div class="vehicle-meta">${v.year || ""} ${escapeHtml(v.make || "")} ${escapeHtml(v.model || "")} &middot; ${v.mileage.toLocaleString()} mi</div>
+          </div>
+        </div>
+        <div class="badges">
+          ${badges.map(([cls, label]) => `<span class="badge ${cls}">${label}</span>`).join("")}
+        </div>
+      </div>`;
+    });
+  }
+  app.innerHTML = html;
+}
+
+function renderVehicleDetail(v) {
+  const items = v.maintenanceItems || [];
+  const warranties = v.warranties || [];
+
+  const itemsSorted = items.map(item => ({ item, s: computeItemStatus(item, v) }))
+    .sort((a, b) => {
+      const order = { bad: 0, warn: 1, ok: 2 };
+      return order[a.s.status] - order[b.s.status];
+    });
+
+  let html = `<span class="back-link" onclick="goHome()">&larr; All vehicles</span>
+  <div class="card">
+    <div class="vehicle-head">
+      <div>
+        <h2>${escapeHtml(v.nickname)}</h2>
+        <div class="vehicle-meta">${v.year || ""} ${escapeHtml(v.make || "")} ${escapeHtml(v.model || "")}${v.vin ? " &middot; VIN " + escapeHtml(v.vin) : ""}</div>
+      </div>
+      <div class="item-actions">
+        <button class="small" onclick="openVehicleForm('${v.id}')">Edit</button>
+        <button class="small danger" onclick="deleteVehicle('${v.id}')">Delete</button>
+      </div>
+    </div>
+    <div class="stat-strip">
+      <div class="stat">Current mileage: <b>${v.mileage.toLocaleString()} mi</b></div>
+      <button class="small" onclick="openMileageForm('${v.id}')">Update mileage</button>
+    </div>
+  </div>
+
+  <div class="section-title">
+    <h3>Maintenance</h3>
+    <button class="small primary" onclick="openMaintenanceForm('${v.id}')">+ Add item</button>
+  </div>
+  <div class="card">`;
+
+  if (itemsSorted.length === 0) {
+    html += `<p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults.</p>
+      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common maintenance items</button>`;
+  } else {
+    itemsSorted.forEach(({ item, s }) => {
+      const badgeCls = s.status;
+      const badgeLabel = s.status === "bad" ? "Overdue" : s.status === "warn" ? "Due soon" : "OK";
+      let detailParts = [];
+      if (s.nextDueMiles !== null) detailParts.push(`next at ${s.nextDueMiles.toLocaleString()} mi`);
+      if (s.nextDueDate !== null) detailParts.push(`by ${s.nextDueDate}`);
+      const linkedWarranty = warranties.find(w => w.id === item.warrantyId);
+      let warrantyNote = "";
+      if (linkedWarranty && (s.status === "bad" || s.status === "warn")) {
+        const ws = warrantyStatus(linkedWarranty, v);
+        if (ws.active) {
+          warrantyNote = `<div class="warranty-note">⚠️ May be covered under "${escapeHtml(linkedWarranty.name)}" warranty (${escapeHtml(linkedWarranty.provider || "")}) — check before paying out of pocket.</div>`;
+        }
+      }
+      const calLink = googleCalendarLink(item, s, v);
+      html += `<div class="item-row">
+        <div>
+          <div class="item-name">${escapeHtml(item.name)}</div>
+          <div class="item-detail">${detailParts.join(" &middot; ") || "no schedule set"}${item.lastServiceDate ? ` &middot; last done ${item.lastServiceDate}` : ""}</div>
+          ${warrantyNote}
+        </div>
+        <div class="item-actions">
+          <span class="badge ${badgeCls}">${badgeLabel}</span>
+          ${calLink ? `<a class="btn small" target="_blank" href="${calLink}">📅 Add reminder</a>` : ""}
+          <button class="small" onclick="logService('${v.id}','${item.id}')">Log done</button>
+          <button class="small" onclick="openMaintenanceForm('${v.id}','${item.id}')">Edit</button>
+          <button class="small danger" onclick="deleteMaintenance('${v.id}','${item.id}')">Delete</button>
+        </div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
+  html += `<div class="section-title">
+    <h3>Warranties</h3>
+    <button class="small primary" onclick="openWarrantyForm('${v.id}')">+ Add warranty</button>
+  </div>
+  <div class="card">`;
+  if (warranties.length === 0) {
+    html += `<p class="vehicle-meta">No warranties tracked yet.</p>`;
+  } else {
+    warranties.forEach(w => {
+      const ws = warrantyStatus(w, v);
+      const end = w.durationMonths ? addMonths(w.startDate, w.durationMonths) : null;
+      html += `<div class="item-row">
+        <div>
+          <div class="item-name">${escapeHtml(w.name)}</div>
+          <div class="item-detail">
+            ${escapeHtml(w.provider || "")}${end ? ` &middot; expires ${end}` : ""}${w.mileageLimit ? ` &middot; up to ${w.mileageLimit.toLocaleString()} mi` : ""}
+          </div>
+          ${w.notes ? `<div class="item-detail">${escapeHtml(w.notes)}</div>` : ""}
+        </div>
+        <div class="item-actions">
+          <span class="badge ${ws.active ? "ok" : "bad"}">${ws.active ? "Active" : "Expired"}</span>
+          <button class="small" onclick="openWarrantyForm('${v.id}','${w.id}')">Edit</button>
+          <button class="small danger" onclick="deleteWarranty('${v.id}','${w.id}')">Delete</button>
+        </div>
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
+  app.innerHTML = html;
+}
+
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function googleCalendarLink(item, s, vehicle) {
+  // If already due/overdue (by either mileage or date), remind today.
+  // Otherwise use the date-based due date if there is one.
+  let dateISO;
+  if (s.status === "bad" || s.status === "warn") {
+    dateISO = todayISO();
+  } else {
+    dateISO = s.nextDueDate || (s.nextDueMiles ? todayISO() : null);
+  }
+  if (!dateISO) return null;
+  const start = dateISO.replace(/-/g, "");
+  const endDate = new Date(dateISO + "T00:00:00");
+  endDate.setDate(endDate.getDate() + 1);
+  const end = endDate.toISOString().slice(0, 10).replace(/-/g, "");
+  const text = encodeURIComponent(`${item.name} due — ${vehicle.nickname}`);
+  const detailsParts = [];
+  if (s.nextDueMiles) detailsParts.push(`Due by ${s.nextDueMiles.toLocaleString()} miles`);
+  if (s.nextDueDate) detailsParts.push(`Due by ${s.nextDueDate}`);
+  const details = encodeURIComponent(detailsParts.join(". "));
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${text}&dates=${start}/${end}&details=${details}`;
+}
+
+/* ---------------- Navigation ---------------- */
+function openVehicle(id) { currentVehicleId = id; render(); }
+function goHome() { currentVehicleId = null; render(); }
+
+/* ---------------- Dialog helper ---------------- */
+const dialogEl = document.getElementById("dialog");
+function showDialog(innerHtml) {
+  dialogEl.innerHTML = `<div class="dialog-inner">${innerHtml}</div>`;
+  dialogEl.showModal();
+}
+function closeDialog() { dialogEl.close(); }
+
+/* ---------------- Vehicle form ---------------- */
+function openVehicleForm(id) {
+  const v = id ? state.vehicles.find(v => v.id === id) : null;
+  showDialog(`
+    <h3>${v ? "Edit vehicle" : "Add vehicle"}</h3>
+    <label>Nickname</label>
+    <input id="f-nickname" value="${v ? escapeHtml(v.nickname) : ""}" placeholder="e.g. My Civic" />
+    <div class="row">
+      <div><label>Year</label><input id="f-year" type="number" value="${v ? v.year || "" : ""}" /></div>
+      <div><label>Make</label><input id="f-make" value="${v ? escapeHtml(v.make || "") : ""}" /></div>
+      <div><label>Model</label><input id="f-model" value="${v ? escapeHtml(v.model || "") : ""}" /></div>
+    </div>
+    <label>VIN (optional)</label>
+    <input id="f-vin" value="${v ? escapeHtml(v.vin || "") : ""}" />
+    <label>Current mileage</label>
+    <input id="f-mileage" type="number" value="${v ? v.mileage : 0}" />
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="saveVehicleForm(${v ? `'${v.id}'` : "null"})">Save</button>
+    </div>
+  `);
+}
+function saveVehicleForm(id) {
+  const nickname = document.getElementById("f-nickname").value.trim() || "My Vehicle";
+  const year = document.getElementById("f-year").value;
+  const make = document.getElementById("f-make").value.trim();
+  const model = document.getElementById("f-model").value.trim();
+  const vin = document.getElementById("f-vin").value.trim();
+  const mileage = parseInt(document.getElementById("f-mileage").value, 10) || 0;
+
+  if (id) {
+    const v = state.vehicles.find(v => v.id === id);
+    Object.assign(v, { nickname, year, make, model, vin, mileage });
+  } else {
+    state.vehicles.push({
+      id: uid(), nickname, year, make, model, vin, mileage,
+      createdAt: todayISO(), maintenanceItems: [], warranties: [],
+    });
+  }
+  saveData();
+  closeDialog();
+  render();
+}
+function deleteVehicle(id) {
+  if (!confirm("Delete this vehicle and all its maintenance/warranty history?")) return;
+  state.vehicles = state.vehicles.filter(v => v.id !== id);
+  saveData();
+  goHome();
+}
+function openMileageForm(vehicleId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  showDialog(`
+    <h3>Update mileage</h3>
+    <label>Current odometer reading</label>
+    <input id="f-newmileage" type="number" value="${v.mileage}" />
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="saveMileage('${vehicleId}')">Save</button>
+    </div>
+  `);
+}
+function saveMileage(vehicleId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  v.mileage = parseInt(document.getElementById("f-newmileage").value, 10) || v.mileage;
+  saveData();
+  closeDialog();
+  render();
+}
+
+/* ---------------- Maintenance item form ---------------- */
+function openMaintenanceForm(vehicleId, itemId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = itemId ? v.maintenanceItems.find(i => i.id === itemId) : null;
+  const warrantyOptions = (v.warranties || []).map(w =>
+    `<option value="${w.id}" ${item && item.warrantyId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`
+  ).join("");
+
+  showDialog(`
+    <h3>${item ? "Edit" : "Add"} maintenance item</h3>
+    <label>Name</label>
+    <input id="f-name" value="${item ? escapeHtml(item.name) : ""}" placeholder="e.g. Oil change" />
+    <div class="row">
+      <div><label>Interval (miles)</label><input id="f-intmiles" type="number" value="${item && item.intervalMiles ? item.intervalMiles : ""}" /></div>
+      <div><label>Interval (months)</label><input id="f-intmonths" type="number" value="${item && item.intervalMonths ? item.intervalMonths : ""}" /></div>
+    </div>
+    <div class="row">
+      <div><label>Last done on (date)</label><input id="f-lastdate" type="date" value="${item ? item.lastServiceDate || "" : ""}" /></div>
+      <div><label>Last done at (mileage)</label><input id="f-lastmiles" type="number" value="${item && item.lastServiceMileage != null ? item.lastServiceMileage : v.mileage}" /></div>
+    </div>
+    <label>Possibly covered by warranty</label>
+    <select id="f-warranty">
+      <option value="">None</option>
+      ${warrantyOptions}
+    </select>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="saveMaintenanceForm('${vehicleId}'${item ? `,'${item.id}'` : ""})">Save</button>
+    </div>
+  `);
+}
+function saveMaintenanceForm(vehicleId, itemId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const name = document.getElementById("f-name").value.trim();
+  if (!name) return;
+  const intervalMiles = parseInt(document.getElementById("f-intmiles").value, 10) || null;
+  const intervalMonths = parseInt(document.getElementById("f-intmonths").value, 10) || null;
+  const lastServiceDate = document.getElementById("f-lastdate").value || null;
+  const lastServiceMileage = document.getElementById("f-lastmiles").value ? parseInt(document.getElementById("f-lastmiles").value, 10) : null;
+  const warrantyId = document.getElementById("f-warranty").value || null;
+
+  v.maintenanceItems = v.maintenanceItems || [];
+  if (itemId) {
+    const item = v.maintenanceItems.find(i => i.id === itemId);
+    Object.assign(item, { name, intervalMiles, intervalMonths, lastServiceDate, lastServiceMileage, warrantyId });
+  } else {
+    v.maintenanceItems.push({ id: uid(), name, intervalMiles, intervalMonths, lastServiceDate, lastServiceMileage, warrantyId });
+  }
+  saveData();
+  closeDialog();
+  render();
+}
+function deleteMaintenance(vehicleId, itemId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  v.maintenanceItems = v.maintenanceItems.filter(i => i.id !== itemId);
+  saveData();
+  render();
+}
+function logService(vehicleId, itemId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = v.maintenanceItems.find(i => i.id === itemId);
+  showDialog(`
+    <h3>Log "${escapeHtml(item.name)}" as done</h3>
+    <label>Date performed</label>
+    <input id="f-donedate" type="date" value="${todayISO()}" />
+    <label>Mileage at time of service</label>
+    <input id="f-donemiles" type="number" value="${v.mileage}" />
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="confirmLogService('${vehicleId}','${itemId}')">Save</button>
+    </div>
+  `);
+}
+function confirmLogService(vehicleId, itemId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = v.maintenanceItems.find(i => i.id === itemId);
+  item.lastServiceDate = document.getElementById("f-donedate").value || todayISO();
+  item.lastServiceMileage = parseInt(document.getElementById("f-donemiles").value, 10) || v.mileage;
+  if (item.lastServiceMileage > v.mileage) v.mileage = item.lastServiceMileage;
+  saveData();
+  closeDialog();
+  render();
+}
+function addDefaultTemplates(vehicleId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  v.maintenanceItems = v.maintenanceItems || [];
+  DEFAULT_MAINTENANCE_TEMPLATES.forEach(t => {
+    v.maintenanceItems.push({
+      id: uid(), name: t.name, intervalMiles: t.intervalMiles, intervalMonths: t.intervalMonths,
+      lastServiceDate: todayISO(), lastServiceMileage: v.mileage, warrantyId: null,
+    });
+  });
+  saveData();
+  render();
+}
+
+/* ---------------- Warranty form ---------------- */
+function openWarrantyForm(vehicleId, warrantyId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const w = warrantyId ? v.warranties.find(w => w.id === warrantyId) : null;
+  showDialog(`
+    <h3>${w ? "Edit" : "Add"} warranty</h3>
+    <label>Name</label>
+    <input id="f-wname" value="${w ? escapeHtml(w.name) : ""}" placeholder="e.g. Powertrain warranty" />
+    <label>Provider / dealer</label>
+    <input id="f-wprovider" value="${w ? escapeHtml(w.provider || "") : ""}" />
+    <div class="row">
+      <div><label>Start date</label><input id="f-wstart" type="date" value="${w ? w.startDate || "" : todayISO()}" /></div>
+      <div><label>Duration (months)</label><input id="f-wmonths" type="number" value="${w && w.durationMonths ? w.durationMonths : ""}" /></div>
+      <div><label>Mileage limit</label><input id="f-wmiles" type="number" value="${w && w.mileageLimit ? w.mileageLimit : ""}" /></div>
+    </div>
+    <label>Notes (what's covered, contact info, etc.)</label>
+    <textarea id="f-wnotes">${w ? escapeHtml(w.notes || "") : ""}</textarea>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="saveWarrantyForm('${vehicleId}'${w ? `,'${w.id}'` : ""})">Save</button>
+    </div>
+  `);
+}
+function saveWarrantyForm(vehicleId, warrantyId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const name = document.getElementById("f-wname").value.trim();
+  if (!name) return;
+  const provider = document.getElementById("f-wprovider").value.trim();
+  const startDate = document.getElementById("f-wstart").value || todayISO();
+  const durationMonths = parseInt(document.getElementById("f-wmonths").value, 10) || null;
+  const mileageLimit = parseInt(document.getElementById("f-wmiles").value, 10) || null;
+  const notes = document.getElementById("f-wnotes").value.trim();
+
+  v.warranties = v.warranties || [];
+  if (warrantyId) {
+    const w = v.warranties.find(w => w.id === warrantyId);
+    Object.assign(w, { name, provider, startDate, durationMonths, mileageLimit, notes });
+  } else {
+    v.warranties.push({ id: uid(), name, provider, startDate, durationMonths, mileageLimit, notes });
+  }
+  saveData();
+  closeDialog();
+  render();
+}
+function deleteWarranty(vehicleId, warrantyId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  v.warranties = v.warranties.filter(w => w.id !== warrantyId);
+  v.maintenanceItems.forEach(i => { if (i.warrantyId === warrantyId) i.warrantyId = null; });
+  saveData();
+  render();
+}
+
+/* ---------------- Import / export ---------------- */
+document.getElementById("exportBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `vehicle-maintenance-backup-${todayISO()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById("importBtn").addEventListener("click", () => {
+  document.getElementById("importFile").click();
+});
+document.getElementById("importFile").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      if (!parsed.vehicles) throw new Error("Invalid file");
+      if (confirm("This will replace your current data with the imported backup. Continue?")) {
+        state = parsed;
+        saveData();
+        currentVehicleId = null;
+        render();
+      }
+    } catch (err) {
+      alert("Could not read that file as a valid backup.");
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = "";
+});
+
+/* ---------------- Init ---------------- */
+render();
+</script>
+
+<footer class="hint" style="padding: 0 16px;">
+  Your data is stored locally in this browser only. Use "Export data" regularly to keep a backup.
+</footer>
+
+</body>
+</html>
