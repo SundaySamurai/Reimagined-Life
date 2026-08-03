@@ -643,8 +643,8 @@ function openMileageForm(vehicleId) {
   pendingMileagePhotoFile = null;
   showDialog(`
     <h3>Update mileage</h3>
-    <label>Odometer photo (optional) — scan to auto-fill the number</label>
-    <input id="f-mileagephoto" type="file" accept="image/*" capture="environment" onchange="handleMileagePhotoSelected(event)" />
+    <label>Odometer photo (optional) — upload or take a photo to auto-fill the number</label>
+    <input id="f-mileagephoto" type="file" accept="image/*" onchange="handleMileagePhotoSelected(event)" />
     <div id="f-mileagephoto-status" class="vehicle-meta"></div>
     <img id="f-mileagephoto-preview" style="max-width:100%;border-radius:8px;margin-top:6px;display:none;" />
     <div id="f-mileage-candidates" class="checklist"></div>
@@ -818,8 +818,8 @@ function logService(vehicleId, itemId) {
   pendingReceiptFile = null;
   showDialog(`
     <h3>Log "${escapeHtml(item.name)}" as done</h3>
-    <label>Receipt photo (optional) — scan to auto-fill details</label>
-    <input id="f-donephoto" type="file" accept="image/*" capture="environment" onchange="handleReceiptPhotoSelected(event)" />
+    <label>Receipt photo (optional) — upload a downloaded receipt or take a photo, to auto-fill details</label>
+    <input id="f-donephoto" type="file" accept="image/*" onchange="handleReceiptPhotoSelected(event)" />
     <div id="f-donephoto-status" class="vehicle-meta"></div>
     <img id="f-donephoto-preview" style="max-width:100%;border-radius:8px;margin-top:6px;display:none;" />
     <label>Date performed</label>
