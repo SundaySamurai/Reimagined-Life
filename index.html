@@ -916,9 +916,15 @@ function addDefaultTemplates(vehicleId) {
   v.maintenanceItems = v.maintenanceItems || [];
   const templates = v.type === "Motorcycle" ? DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE : DEFAULT_MAINTENANCE_TEMPLATES;
   templates.forEach(t => {
+    // Snap to the most recent point in this item's cycle at or below the current
+    // mileage, rather than assuming everything was just serviced today — so a
+    // used vehicle's schedule reflects where it actually sits in the cycle.
+    const lastServiceMileage = t.intervalMiles
+      ? Math.floor(v.mileage / t.intervalMiles) * t.intervalMiles
+      : v.mileage;
     v.maintenanceItems.push({
       id: uid(), name: t.name, intervalMiles: t.intervalMiles, intervalMonths: t.intervalMonths,
-      lastServiceDate: todayISO(), lastServiceMileage: v.mileage, warrantyId: null,
+      lastServiceDate: todayISO(), lastServiceMileage, warrantyId: null,
     });
   });
   saveData();
