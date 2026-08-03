@@ -4,8 +4,8 @@ A single-file web app for tracking vehicle maintenance schedules and warranty co
 
 ## Features
 
-- **Multiple vehicles** — track as many cars as you own.
-- **Maintenance schedule** by mileage and/or date (whichever comes first), with common presets (oil change, tire rotation, brake inspection, etc.) plus custom items.
+- **Multiple vehicles** — track as many cars, SUVs, trucks, or motorcycles as you own.
+- **Maintenance schedule** by mileage and/or date (whichever comes first), with common presets (oil change, tire rotation, brake inspection, etc.) plus custom items. Motorcycles get their own preset list (minor/major service, chain care, valve clearance, etc.) based on Royal Enfield's published service structure — a reasonable starting point for most single-cylinder bikes, but edit the intervals to match your exact model's manual.
 - **Status at a glance** — each item is flagged OK, Due soon, or Overdue based on your vehicle's current mileage and today's date.
 - **Warranty tracking** — record warranty coverage (provider, expiration date/mileage, notes) and optionally link it to a maintenance item. If that item comes due while the warranty is still active, you'll see a "may be covered under warranty" note.
 - **Calendar reminders** — each due item has an "Add reminder" link that opens a pre-filled Google Calendar event (one click to save — no sign-in or API setup required).

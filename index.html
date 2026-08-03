@@ -213,6 +213,21 @@ const DEFAULT_MAINTENANCE_TEMPLATES = [
   { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
 ];
 
+// Based on Royal Enfield's official minor/major service structure (5,000km/6mo minor,
+// 10,000km/12mo major) — a reasonable single-cylinder motorcycle baseline; edit intervals
+// per your bike/manual as needed.
+const DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE = [
+  { name: "First service (oil, filter & full inspection)", intervalMiles: 500, intervalMonths: 1 },
+  { name: "Oil & filter change (minor service)", intervalMiles: 3000, intervalMonths: 6 },
+  { name: "Major service (valve clearance, spark plug, air filter, throttle body)", intervalMiles: 6000, intervalMonths: 12 },
+  { name: "Chain cleaning, lubrication & tension check", intervalMiles: 300, intervalMonths: null },
+  { name: "Brake fluid & brake system check", intervalMiles: null, intervalMonths: 12 },
+  { name: "Tire pressure & tread check", intervalMiles: null, intervalMonths: 1 },
+  { name: "Battery terminals & charge check", intervalMiles: null, intervalMonths: 6 },
+  { name: "Nuts, bolts & fasteners torque check", intervalMiles: null, intervalMonths: 6 },
+  { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
+];
+
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
@@ -434,8 +449,8 @@ function renderDashboard() {
       html += `<div class="card vehicle-card" onclick="openVehicle('${v.id}')">
         <div class="vehicle-head">
           <div>
-            <h2>${escapeHtml(v.nickname)}</h2>
-            <div class="vehicle-meta">${v.year || ""} ${escapeHtml(v.make || "")} ${escapeHtml(v.model || "")} &middot; ${v.mileage.toLocaleString()} mi</div>
+            <h2>${vehicleTypeIcon(v.type)} ${escapeHtml(v.nickname)}</h2>
+            <div class="vehicle-meta">${v.year || ""} ${escapeHtml(v.make || "")} ${escapeHtml(v.model || "")}${v.type ? ` &middot; ${escapeHtml(v.type)}` : ""} &middot; ${v.mileage.toLocaleString()} mi</div>
           </div>
         </div>
         <div class="badges">
@@ -461,8 +476,8 @@ function renderVehicleDetail(v) {
   <div class="card">
     <div class="vehicle-head">
       <div>
-        <h2>${escapeHtml(v.nickname)}</h2>
-        <div class="vehicle-meta">${v.year || ""} ${escapeHtml(v.make || "")} ${escapeHtml(v.model || "")}${v.vin ? " &middot; VIN " + escapeHtml(v.vin) : ""}</div>
+        <h2>${vehicleTypeIcon(v.type)} ${escapeHtml(v.nickname)}</h2>
+        <div class="vehicle-meta">${v.year || ""} ${escapeHtml(v.make || "")} ${escapeHtml(v.model || "")}${v.type ? ` &middot; ${escapeHtml(v.type)}` : ""}${v.vin ? " &middot; VIN " + escapeHtml(v.vin) : ""}</div>
       </div>
       <div class="item-actions">
         <button class="small" onclick="openVehicleForm('${v.id}')">Edit</button>
@@ -484,7 +499,7 @@ function renderVehicleDetail(v) {
 
   if (itemsSorted.length === 0) {
     html += `<p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults.</p>
-      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common maintenance items</button>`;
+      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common ${v.type === "Motorcycle" ? "motorcycle " : ""}maintenance items</button>`;
   } else {
     itemsSorted.forEach(({ item, s }) => {
       const badgeCls = s.status;
@@ -555,6 +570,9 @@ function renderVehicleDetail(v) {
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+function vehicleTypeIcon(type) {
+  return type === "Motorcycle" ? "🏍️" : "🚗";
+}
 
 function googleCalendarLink(item, s, vehicle) {
   // If already due/overdue (by either mileage or date), remind today.
@@ -597,6 +615,12 @@ function openVehicleForm(id) {
     <h3>${v ? "Edit vehicle" : "Add vehicle"}</h3>
     <label>Nickname</label>
     <input id="f-nickname" value="${v ? escapeHtml(v.nickname) : ""}" placeholder="e.g. My Civic" />
+    <label>Type</label>
+    <select id="f-type">
+      ${["Car", "SUV", "Truck", "Motorcycle", "Other"].map(t =>
+        `<option value="${t}" ${(v ? v.type : "Car") === t ? "selected" : ""}>${t}</option>`
+      ).join("")}
+    </select>
     <div class="row">
       <div><label>Year</label><input id="f-year" type="number" value="${v ? v.year || "" : ""}" /></div>
       <div><label>Make</label><input id="f-make" value="${v ? escapeHtml(v.make || "") : ""}" /></div>
@@ -614,6 +638,7 @@ function openVehicleForm(id) {
 }
 function saveVehicleForm(id) {
   const nickname = document.getElementById("f-nickname").value.trim() || "My Vehicle";
+  const type = document.getElementById("f-type").value;
   const year = document.getElementById("f-year").value;
   const make = document.getElementById("f-make").value.trim();
   const model = document.getElementById("f-model").value.trim();
@@ -622,10 +647,10 @@ function saveVehicleForm(id) {
 
   if (id) {
     const v = state.vehicles.find(v => v.id === id);
-    Object.assign(v, { nickname, year, make, model, vin, mileage });
+    Object.assign(v, { nickname, type, year, make, model, vin, mileage });
   } else {
     state.vehicles.push({
-      id: uid(), nickname, year, make, model, vin, mileage,
+      id: uid(), nickname, type, year, make, model, vin, mileage,
       createdAt: todayISO(), maintenanceItems: [], warranties: [],
     });
   }
@@ -888,7 +913,8 @@ async function confirmLogService(vehicleId, itemId) {
 function addDefaultTemplates(vehicleId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
   v.maintenanceItems = v.maintenanceItems || [];
-  DEFAULT_MAINTENANCE_TEMPLATES.forEach(t => {
+  const templates = v.type === "Motorcycle" ? DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE : DEFAULT_MAINTENANCE_TEMPLATES;
+  templates.forEach(t => {
     v.maintenanceItems.push({
       id: uid(), name: t.name, intervalMiles: t.intervalMiles, intervalMonths: t.intervalMonths,
       lastServiceDate: todayISO(), lastServiceMileage: v.mileage, warrantyId: null,
