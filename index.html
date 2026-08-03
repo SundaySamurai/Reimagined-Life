@@ -173,6 +173,24 @@
   .stat-strip { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
   .stat { font-size: 0.8rem; color: var(--muted); }
   .stat b { color: var(--text); }
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--text);
+    color: var(--bg);
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    z-index: 50;
+    max-width: 90vw;
+    text-align: center;
+  }
+  .toast.show { opacity: 0.95; }
 </style>
 </head>
 <body>
@@ -259,7 +277,10 @@ function loadData() {
   } catch (e) { console.error("Failed to load data", e); }
   return { vehicles: [] };
 }
-function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function saveData() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!suppressDirtyTracking) markDirtyAndScheduleAutoPush();
+}
 
 let state = loadData();
 let currentVehicleId = null;
@@ -1011,15 +1032,17 @@ function deleteWarranty(vehicleId, warrantyId) {
 /* ---------------- Cloud sync (your own private GitHub repo) ---------------- */
 const SYNC_CONFIG_KEY = "vmtSyncConfig.v1";
 const SYNC_FILE_PATH = "data.json";
+const AUTO_PUSH_DEBOUNCE_MS = 4000;
 
 function loadSyncConfig() {
   try {
     const raw = localStorage.getItem(SYNC_CONFIG_KEY);
     if (raw) return JSON.parse(raw);
   } catch (e) { console.error(e); }
-  return { token: "", owner: "", repo: "", branch: "main", lastPushAt: null, lastPullAt: null };
+  return { token: "", owner: "", repo: "", branch: "main", lastPushAt: null, lastPullAt: null, lastSyncedSha: null, dirty: false };
 }
 function saveSyncConfig(cfg) { localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(cfg)); }
+function syncConfigured(cfg) { return !!(cfg.token && cfg.owner && cfg.repo); }
 
 function utf8ToBase64(str) { return btoa(unescape(encodeURIComponent(str))); }
 function base64ToUtf8(b64) { return decodeURIComponent(escape(atob(b64.replace(/\n/g, "")))); }
@@ -1036,6 +1059,164 @@ async function githubApi(cfg, path, options = {}) {
   return res;
 }
 
+/* ---- Pure sync operations (no UI), reused by manual buttons and auto-sync ---- */
+async function fetchCloudFile(cfg) {
+  const res = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}?ref=${encodeURIComponent(cfg.branch)}`);
+  if (res.status === 404) return { notFound: true };
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Fetch failed (${res.status})`);
+  }
+  const file = await res.json();
+  return { notFound: false, sha: file.sha, content: file.content };
+}
+async function pushPayloadToCloud(cfg, payload, knownSha) {
+  const content = utf8ToBase64(JSON.stringify(payload, null, 2));
+  const putRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: `Update vehicle tracker data — ${new Date().toISOString()}`,
+      content,
+      branch: cfg.branch,
+      ...(knownSha ? { sha: knownSha } : {}),
+    }),
+  });
+  if (!putRes.ok) {
+    const err = await putRes.json().catch(() => ({}));
+    throw new Error(err.message || `Push failed (${putRes.status})`);
+  }
+  const result = await putRes.json();
+  return result.content.sha;
+}
+function markSyncedClean(sha, { push, pull } = {}) {
+  const cfg = loadSyncConfig();
+  cfg.dirty = false;
+  cfg.lastSyncedSha = sha;
+  if (push) cfg.lastPushAt = Date.now();
+  if (pull) cfg.lastPullAt = Date.now();
+  saveSyncConfig(cfg);
+}
+// Applies cloud data without re-triggering the dirty/auto-push cycle we just satisfied.
+async function applyPulledPayloadCleanly(parsed, sha) {
+  suppressDirtyTracking = true;
+  try { await applyBackupPayload(parsed); }
+  finally { suppressDirtyTracking = false; }
+  markSyncedClean(sha, { pull: true });
+}
+
+/* ---- Toast (small non-blocking status message for background sync activity) ---- */
+let toastTimer = null;
+function showToast(msg) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
+}
+
+/* ---- Dirty tracking + debounced auto-push, triggered from saveData() ---- */
+let suppressDirtyTracking = false;
+let autoPushTimer = null;
+function markDirtyAndScheduleAutoPush() {
+  const cfg = loadSyncConfig();
+  if (!syncConfigured(cfg)) return;
+  if (!cfg.dirty) { cfg.dirty = true; saveSyncConfig(cfg); }
+  clearTimeout(autoPushTimer);
+  autoPushTimer = setTimeout(attemptAutoPush, AUTO_PUSH_DEBOUNCE_MS);
+}
+async function attemptAutoPush() {
+  const cfg = loadSyncConfig();
+  if (!syncConfigured(cfg) || !cfg.dirty) return;
+  try {
+    const file = await fetchCloudFile(cfg);
+    if (!file.notFound && cfg.lastSyncedSha && file.sha !== cfg.lastSyncedSha) {
+      // Cloud moved since our last known sync point AND we have local changes — real conflict.
+      showSyncConflictDialog(file);
+      return;
+    }
+    const payload = await buildBackupPayload();
+    const newSha = await pushPayloadToCloud(cfg, payload, file.notFound ? null : file.sha);
+    markSyncedClean(newSha, { push: true });
+    showToast("☁ Auto-synced to the cloud.");
+    refreshSyncStatusIfDialogOpen();
+  } catch (e) {
+    console.error("Auto-push failed", e);
+    showToast("⚠ Auto-sync failed — open Cloud sync to check.");
+  }
+}
+// Runs on load and whenever the app becomes visible again — pulls safely if nothing
+// local is at risk, or flags a conflict dialog if both sides have changed.
+async function autoSyncCheck() {
+  const cfg = loadSyncConfig();
+  if (!syncConfigured(cfg)) return;
+  try {
+    const file = await fetchCloudFile(cfg);
+    if (file.notFound) return;
+    if (cfg.lastSyncedSha && file.sha === cfg.lastSyncedSha) {
+      if (cfg.dirty) attemptAutoPush();
+      return;
+    }
+    if (!cfg.dirty) {
+      const parsed = JSON.parse(base64ToUtf8(file.content));
+      await applyPulledPayloadCleanly(parsed, file.sha);
+      showToast("☁ Synced latest changes from the cloud.");
+    } else {
+      showSyncConflictDialog(file);
+    }
+  } catch (e) {
+    console.error("Auto-sync check failed", e);
+  }
+}
+
+/* ---- Conflict resolution dialog ---- */
+let pendingConflictFile = null;
+function showSyncConflictDialog(file) {
+  pendingConflictFile = file;
+  showDialog(`
+    <h3>⚠️ Sync conflict</h3>
+    <p class="vehicle-meta">Your cloud data changed (likely from another device), and this device also has unsynced changes. Pick which version to keep — the other one will be overwritten.</p>
+    <div class="dialog-actions" style="justify-content:space-between;">
+      <button class="small danger" onclick="resolveConflictKeepLocal()">Keep my changes here</button>
+      <button class="small" onclick="resolveConflictUseCloud()">Use cloud version</button>
+      <button onclick="closeDialog()">Decide later</button>
+    </div>
+  `);
+}
+async function resolveConflictKeepLocal() {
+  const cfg = loadSyncConfig();
+  try {
+    const payload = await buildBackupPayload();
+    const newSha = await pushPayloadToCloud(cfg, payload, pendingConflictFile.sha);
+    markSyncedClean(newSha, { push: true });
+    showToast("☁ Kept your local changes — cloud updated.");
+  } catch (e) {
+    console.error(e);
+    showToast("⚠ Couldn't resolve conflict — try Cloud sync manually.");
+  }
+  pendingConflictFile = null;
+  closeDialog();
+}
+async function resolveConflictUseCloud() {
+  try {
+    const parsed = JSON.parse(base64ToUtf8(pendingConflictFile.content));
+    await applyPulledPayloadCleanly(parsed, pendingConflictFile.sha);
+    showToast("☁ Switched to the cloud version.");
+  } catch (e) {
+    console.error(e);
+    showToast("⚠ Couldn't apply the cloud version.");
+  }
+  pendingConflictFile = null;
+  closeDialog();
+}
+
+/* ---- Settings dialog + manual buttons ---- */
 function openSyncSettings() {
   const cfg = loadSyncConfig();
   showDialog(`
@@ -1048,10 +1229,8 @@ function openSyncSettings() {
       <div><label>Repo name</label><input id="f-syncrepo" value="${escapeHtml(cfg.repo || "")}" placeholder="e.g. vehicle-tracker-data" /></div>
       <div><label>Branch</label><input id="f-syncbranch" value="${escapeHtml(cfg.branch || "main")}" /></div>
     </div>
-    <div id="sync-status" class="vehicle-meta" style="margin-top:10px;">
-      ${cfg.lastPushAt ? `Last pushed: ${new Date(cfg.lastPushAt).toLocaleString()}<br>` : "Never pushed yet.<br>"}
-      ${cfg.lastPullAt ? `Last pulled: ${new Date(cfg.lastPullAt).toLocaleString()}` : "Never pulled yet."}
-    </div>
+    <p class="vehicle-meta">Once set up, this device auto-pulls when you open the app and auto-pushes shortly after you make a change — the buttons below are for forcing it manually.</p>
+    <div id="sync-status" class="vehicle-meta" style="margin-top:6px;">${syncStatusText(cfg)}</div>
     <div class="dialog-actions" style="justify-content:space-between;">
       <div>
         <button class="small" onclick="doSyncPush()">⬆ Push to cloud</button>
@@ -1063,6 +1242,17 @@ function openSyncSettings() {
       </div>
     </div>
   `);
+}
+function syncStatusText(cfg) {
+  const parts = [];
+  parts.push(cfg.dirty ? "● Unsynced local changes" : "✓ Synced with cloud");
+  parts.push(cfg.lastPushAt ? `Last pushed: ${new Date(cfg.lastPushAt).toLocaleString()}` : "Never pushed yet.");
+  parts.push(cfg.lastPullAt ? `Last pulled: ${new Date(cfg.lastPullAt).toLocaleString()}` : "Never pulled yet.");
+  return parts.join("<br>");
+}
+function refreshSyncStatusIfDialogOpen() {
+  const el = document.getElementById("sync-status");
+  if (el) el.innerHTML = syncStatusText(loadSyncConfig());
 }
 function readSyncSettingsForm() {
   return {
@@ -1077,6 +1267,7 @@ function saveSyncSettingsForm() {
   const form = readSyncSettingsForm();
   saveSyncConfig({ ...cfg, ...form });
   closeDialog();
+  autoSyncCheck();
 }
 function setSyncStatus(msg) {
   const el = document.getElementById("sync-status");
@@ -1088,39 +1279,15 @@ async function doSyncPush() {
     setSyncStatus("Please fill in the token, repo owner, and repo name first.");
     return;
   }
-  let cfg = { ...loadSyncConfig(), ...form };
+  const cfg = { ...loadSyncConfig(), ...form };
   saveSyncConfig(cfg);
   setSyncStatus("Pushing…");
   try {
     const payload = await buildBackupPayload();
-    const content = utf8ToBase64(JSON.stringify(payload, null, 2));
-
-    let sha = null;
-    const getRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}?ref=${encodeURIComponent(cfg.branch)}`);
-    if (getRes.ok) {
-      const existing = await getRes.json();
-      sha = existing.sha;
-    } else if (getRes.status !== 404) {
-      throw new Error(`Couldn't check existing file (${getRes.status})`);
-    }
-
-    const putRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: `Update vehicle tracker data — ${new Date().toISOString()}`,
-        content,
-        branch: cfg.branch,
-        ...(sha ? { sha } : {}),
-      }),
-    });
-    if (!putRes.ok) {
-      const err = await putRes.json().catch(() => ({}));
-      throw new Error(err.message || `Push failed (${putRes.status})`);
-    }
-    cfg = { ...cfg, lastPushAt: Date.now() };
-    saveSyncConfig(cfg);
-    setSyncStatus(`Pushed successfully at ${new Date(cfg.lastPushAt).toLocaleString()}.`);
+    const file = await fetchCloudFile(cfg);
+    const newSha = await pushPayloadToCloud(cfg, payload, file.notFound ? null : file.sha);
+    markSyncedClean(newSha, { push: true });
+    setSyncStatus(syncStatusText(loadSyncConfig()));
   } catch (e) {
     console.error(e);
     setSyncStatus(`Push failed: ${e.message}`);
@@ -1132,26 +1299,19 @@ async function doSyncPull() {
     setSyncStatus("Please fill in the token, repo owner, and repo name first.");
     return;
   }
-  let cfg = { ...loadSyncConfig(), ...form };
+  const cfg = { ...loadSyncConfig(), ...form };
   saveSyncConfig(cfg);
   if (!confirm("This will replace your current data on this device with whatever is in the cloud. Continue?")) return;
   setSyncStatus("Pulling…");
   try {
-    const getRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}?ref=${encodeURIComponent(cfg.branch)}`);
-    if (getRes.status === 404) {
+    const file = await fetchCloudFile(cfg);
+    if (file.notFound) {
       setSyncStatus("No data found in the cloud yet — try pushing from a device with data first.");
       return;
     }
-    if (!getRes.ok) {
-      const err = await getRes.json().catch(() => ({}));
-      throw new Error(err.message || `Pull failed (${getRes.status})`);
-    }
-    const file = await getRes.json();
     const parsed = JSON.parse(base64ToUtf8(file.content));
-    await applyBackupPayload(parsed);
-    cfg = { ...cfg, lastPullAt: Date.now() };
-    saveSyncConfig(cfg);
-    setSyncStatus(`Pulled successfully at ${new Date(cfg.lastPullAt).toLocaleString()}.`);
+    await applyPulledPayloadCleanly(parsed, file.sha);
+    setSyncStatus(syncStatusText(loadSyncConfig()));
   } catch (e) {
     console.error(e);
     setSyncStatus(`Pull failed: ${e.message}`);
@@ -1234,6 +1394,11 @@ document.getElementById("importFile").addEventListener("change", (e) => {
 
 /* ---------------- Init ---------------- */
 render();
+autoSyncCheck();
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") autoSyncCheck();
+});
+window.addEventListener("focus", () => autoSyncCheck());
 </script>
 
 <footer class="hint" style="padding: 0 16px;">
