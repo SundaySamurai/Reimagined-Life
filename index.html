@@ -414,8 +414,13 @@ function daysBetween(iso) {
   return Math.round((d - now) / 86400000);
 }
 
-const DUE_SOON_MILES = 500;
-const DUE_SOON_DAYS = 30;
+// "Due soon" warns within this many miles/days of the next due point — but capped as a
+// fraction of the item's own interval, so short-cycle items (e.g. a 300mi chain check)
+// aren't stuck permanently showing "Due soon" the moment they're logged, since the whole
+// interval would otherwise be smaller than the flat warning window.
+const DUE_SOON_MILES_MAX = 500;
+const DUE_SOON_DAYS_MAX = 30;
+const DUE_SOON_FRACTION = 0.15;
 
 function computeItemStatus(item, vehicle) {
   let nextDueMiles = null, nextDueDate = null;
@@ -425,10 +430,17 @@ function computeItemStatus(item, vehicle) {
   const milesRemaining = nextDueMiles !== null ? nextDueMiles - vehicle.mileage : null;
   const daysRemaining = nextDueDate !== null ? daysBetween(nextDueDate) : null;
 
+  const milesDueSoonThreshold = item.intervalMiles
+    ? Math.min(DUE_SOON_MILES_MAX, Math.ceil(item.intervalMiles * DUE_SOON_FRACTION))
+    : DUE_SOON_MILES_MAX;
+  const daysDueSoonThreshold = item.intervalMonths
+    ? Math.min(DUE_SOON_DAYS_MAX, Math.ceil(item.intervalMonths * 30 * DUE_SOON_FRACTION))
+    : DUE_SOON_DAYS_MAX;
+
   let status = "ok";
   if ((milesRemaining !== null && milesRemaining <= 0) || (daysRemaining !== null && daysRemaining <= 0)) {
     status = "bad";
-  } else if ((milesRemaining !== null && milesRemaining <= DUE_SOON_MILES) || (daysRemaining !== null && daysRemaining <= DUE_SOON_DAYS)) {
+  } else if ((milesRemaining !== null && milesRemaining <= milesDueSoonThreshold) || (daysRemaining !== null && daysRemaining <= daysDueSoonThreshold)) {
     status = "warn";
   }
   return { nextDueMiles, nextDueDate, milesRemaining, daysRemaining, status };
