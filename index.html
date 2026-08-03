@@ -183,6 +183,7 @@
     <div class="sub">Track services, stay ahead of what's due, use your warranty before it lapses.</div>
   </div>
   <div class="toolbar">
+    <button class="small" title="Sync your data to a private GitHub repo you own" onclick="openSyncSettings()">☁ Cloud sync</button>
     <button id="exportBtn" class="small" title="Backup your data as a JSON file">Export data</button>
     <button id="importBtn" class="small" title="Restore data from a JSON backup">Import data</button>
     <input type="file" id="importFile" accept="application/json" style="display:none" />
@@ -949,26 +950,195 @@ function deleteWarranty(vehicleId, warrantyId) {
   render();
 }
 
-/* ---------------- Import / export ---------------- */
+/* ---------------- Cloud sync (your own private GitHub repo) ---------------- */
+const SYNC_CONFIG_KEY = "vmtSyncConfig.v1";
+const SYNC_FILE_PATH = "data.json";
+
+function loadSyncConfig() {
+  try {
+    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { console.error(e); }
+  return { token: "", owner: "", repo: "", branch: "main", lastPushAt: null, lastPullAt: null };
+}
+function saveSyncConfig(cfg) { localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(cfg)); }
+
+function utf8ToBase64(str) { return btoa(unescape(encodeURIComponent(str))); }
+function base64ToUtf8(b64) { return decodeURIComponent(escape(atob(b64.replace(/\n/g, "")))); }
+
+async function githubApi(cfg, path, options = {}) {
+  const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${path}`, {
+    ...options,
+    headers: {
+      "Authorization": `Bearer ${cfg.token}`,
+      "Accept": "application/vnd.github+json",
+      ...(options.headers || {}),
+    },
+  });
+  return res;
+}
+
+function openSyncSettings() {
+  const cfg = loadSyncConfig();
+  showDialog(`
+    <h3>Cloud sync</h3>
+    <p class="vehicle-meta">Sync your data (and photos) to a private GitHub repo you control, so you can pick it up on another device. Use a <b>fine-grained personal access token</b> scoped to just that one repo, with "Contents: Read and write" permission — <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">create one here</a>. The token is stored only in this browser.</p>
+    <label>GitHub personal access token</label>
+    <input id="f-synctoken" type="password" value="${escapeHtml(cfg.token || "")}" placeholder="github_pat_…" />
+    <div class="row">
+      <div><label>Repo owner</label><input id="f-syncowner" value="${escapeHtml(cfg.owner || "")}" placeholder="e.g. SundaySamurai" /></div>
+      <div><label>Repo name</label><input id="f-syncrepo" value="${escapeHtml(cfg.repo || "")}" placeholder="e.g. vehicle-tracker-data" /></div>
+      <div><label>Branch</label><input id="f-syncbranch" value="${escapeHtml(cfg.branch || "main")}" /></div>
+    </div>
+    <div id="sync-status" class="vehicle-meta" style="margin-top:10px;">
+      ${cfg.lastPushAt ? `Last pushed: ${new Date(cfg.lastPushAt).toLocaleString()}<br>` : "Never pushed yet.<br>"}
+      ${cfg.lastPullAt ? `Last pulled: ${new Date(cfg.lastPullAt).toLocaleString()}` : "Never pulled yet."}
+    </div>
+    <div class="dialog-actions" style="justify-content:space-between;">
+      <div>
+        <button class="small" onclick="doSyncPush()">⬆ Push to cloud</button>
+        <button class="small" onclick="doSyncPull()">⬇ Pull from cloud</button>
+      </div>
+      <div>
+        <button onclick="closeDialog()">Close</button>
+        <button class="primary" onclick="saveSyncSettingsForm()">Save settings</button>
+      </div>
+    </div>
+  `);
+}
+function readSyncSettingsForm() {
+  return {
+    token: document.getElementById("f-synctoken").value.trim(),
+    owner: document.getElementById("f-syncowner").value.trim(),
+    repo: document.getElementById("f-syncrepo").value.trim(),
+    branch: document.getElementById("f-syncbranch").value.trim() || "main",
+  };
+}
+function saveSyncSettingsForm() {
+  const cfg = loadSyncConfig();
+  const form = readSyncSettingsForm();
+  saveSyncConfig({ ...cfg, ...form });
+  closeDialog();
+}
+function setSyncStatus(msg) {
+  const el = document.getElementById("sync-status");
+  if (el) el.textContent = msg;
+}
+async function doSyncPush() {
+  const form = readSyncSettingsForm();
+  if (!form.token || !form.owner || !form.repo) {
+    setSyncStatus("Please fill in the token, repo owner, and repo name first.");
+    return;
+  }
+  let cfg = { ...loadSyncConfig(), ...form };
+  saveSyncConfig(cfg);
+  setSyncStatus("Pushing…");
+  try {
+    const payload = await buildBackupPayload();
+    const content = utf8ToBase64(JSON.stringify(payload, null, 2));
+
+    let sha = null;
+    const getRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}?ref=${encodeURIComponent(cfg.branch)}`);
+    if (getRes.ok) {
+      const existing = await getRes.json();
+      sha = existing.sha;
+    } else if (getRes.status !== 404) {
+      throw new Error(`Couldn't check existing file (${getRes.status})`);
+    }
+
+    const putRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: `Update vehicle tracker data — ${new Date().toISOString()}`,
+        content,
+        branch: cfg.branch,
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    if (!putRes.ok) {
+      const err = await putRes.json().catch(() => ({}));
+      throw new Error(err.message || `Push failed (${putRes.status})`);
+    }
+    cfg = { ...cfg, lastPushAt: Date.now() };
+    saveSyncConfig(cfg);
+    setSyncStatus(`Pushed successfully at ${new Date(cfg.lastPushAt).toLocaleString()}.`);
+  } catch (e) {
+    console.error(e);
+    setSyncStatus(`Push failed: ${e.message}`);
+  }
+}
+async function doSyncPull() {
+  const form = readSyncSettingsForm();
+  if (!form.token || !form.owner || !form.repo) {
+    setSyncStatus("Please fill in the token, repo owner, and repo name first.");
+    return;
+  }
+  let cfg = { ...loadSyncConfig(), ...form };
+  saveSyncConfig(cfg);
+  if (!confirm("This will replace your current data on this device with whatever is in the cloud. Continue?")) return;
+  setSyncStatus("Pulling…");
+  try {
+    const getRes = await githubApi(cfg, `/contents/${SYNC_FILE_PATH}?ref=${encodeURIComponent(cfg.branch)}`);
+    if (getRes.status === 404) {
+      setSyncStatus("No data found in the cloud yet — try pushing from a device with data first.");
+      return;
+    }
+    if (!getRes.ok) {
+      const err = await getRes.json().catch(() => ({}));
+      throw new Error(err.message || `Pull failed (${getRes.status})`);
+    }
+    const file = await getRes.json();
+    const parsed = JSON.parse(base64ToUtf8(file.content));
+    await applyBackupPayload(parsed);
+    cfg = { ...cfg, lastPullAt: Date.now() };
+    saveSyncConfig(cfg);
+    setSyncStatus(`Pulled successfully at ${new Date(cfg.lastPullAt).toLocaleString()}.`);
+  } catch (e) {
+    console.error(e);
+    setSyncStatus(`Pull failed: ${e.message}`);
+  }
+}
+
+/* ---------------- Import / export (shared with cloud sync) ---------------- */
+async function buildBackupPayload() {
+  const photoIds = new Set();
+  state.vehicles.forEach(v => {
+    (v.mileageLog || []).forEach(e => e.photoId && photoIds.add(e.photoId));
+    (v.maintenanceItems || []).forEach(i => (i.history || []).forEach(e => e.photoId && photoIds.add(e.photoId)));
+  });
+  const photos = {};
+  for (const id of photoIds) {
+    try {
+      const blob = await getPhotoBlob(id);
+      if (blob) photos[id] = await blobToDataURL(blob);
+    } catch (e) { console.error("Failed to read photo for backup", id, e); }
+  }
+  return { ...state, photos };
+}
+async function applyBackupPayload(parsed) {
+  if (!parsed || !parsed.vehicles) throw new Error("Invalid backup data");
+  const photos = parsed.photos || {};
+  delete parsed.photos;
+  state = parsed;
+  saveData();
+  for (const [id, dataURL] of Object.entries(photos)) {
+    try {
+      const blob = await dataURLToBlob(dataURL);
+      await savePhotoBlob(id, blob);
+    } catch (e) { console.error("Failed to restore photo", id, e); }
+  }
+  currentVehicleId = null;
+  render();
+}
+
 document.getElementById("exportBtn").addEventListener("click", async () => {
   const btn = document.getElementById("exportBtn");
   const originalLabel = btn.textContent;
   btn.textContent = "Exporting…";
   btn.disabled = true;
   try {
-    const photoIds = new Set();
-    state.vehicles.forEach(v => {
-      (v.mileageLog || []).forEach(e => e.photoId && photoIds.add(e.photoId));
-      (v.maintenanceItems || []).forEach(i => (i.history || []).forEach(e => e.photoId && photoIds.add(e.photoId)));
-    });
-    const photos = {};
-    for (const id of photoIds) {
-      try {
-        const blob = await getPhotoBlob(id);
-        if (blob) photos[id] = await blobToDataURL(blob);
-      } catch (e) { console.error("Failed to export photo", id, e); }
-    }
-    const exportObj = { ...state, photos };
+    const exportObj = await buildBackupPayload();
     const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -993,18 +1163,7 @@ document.getElementById("importFile").addEventListener("change", (e) => {
       const parsed = JSON.parse(reader.result);
       if (!parsed.vehicles) throw new Error("Invalid file");
       if (confirm("This will replace your current data with the imported backup. Continue?")) {
-        const photos = parsed.photos || {};
-        delete parsed.photos;
-        state = parsed;
-        saveData();
-        for (const [id, dataURL] of Object.entries(photos)) {
-          try {
-            const blob = await dataURLToBlob(dataURL);
-            await savePhotoBlob(id, blob);
-          } catch (e) { console.error("Failed to import photo", id, e); }
-        }
-        currentVehicleId = null;
-        render();
+        await applyBackupPayload(parsed);
       }
     } catch (err) {
       console.error(err);
@@ -1020,7 +1179,7 @@ render();
 </script>
 
 <footer class="hint" style="padding: 0 16px;">
-  Your data is stored locally in this browser only. Use "Export data" regularly to keep a backup.
+  Your data is stored locally in this browser by default. Use "Cloud sync" to access it from another device, or "Export data" for a one-off backup.
 </footer>
 
 </body>

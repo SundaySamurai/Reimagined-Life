@@ -11,7 +11,8 @@ A single-file web app for tracking vehicle maintenance schedules and warranty co
 - **Calendar reminders** — each due item has an "Add reminder" link that opens a pre-filled Google Calendar event (one click to save — no sign-in or API setup required).
 - **Photo upload for receipts and odometer readings** — attach a photo of a service receipt to a maintenance log entry, or a photo of your odometer to a mileage update. The app scans the photo on-device (no internet, no account) and tries to auto-fill the date, cost, and mileage for you to review before saving.
 - **Service and mileage history** — every logged service and every mileage update is kept (with its photo, if attached), viewable per maintenance item or per vehicle.
-- **Local storage** — all data (and photos) stays on your device. Use the Export/Import buttons to back up or move your data, including photos.
+- **Local storage** — all data (and photos) stays on your device by default. Use the Export/Import buttons to back up or move your data, including photos.
+- **Cloud sync across devices** — optionally sync your data (and photos) to a private GitHub repo you own, so the same data shows up on your phone and laptop. Explicit "Push" and "Pull" buttons, no automatic background syncing.
 
 ## Usage
 
@@ -42,3 +43,14 @@ npx serve
 ```
 
 Scanning accuracy depends on photo clarity — always double-check the auto-filled fields before saving.
+
+## Notes on cloud sync
+
+Click "☁ Cloud sync" to set this up. It stores your data as a single JSON file (photos included, as embedded base64) in a **private GitHub repo you create and own** — the app never talks to any server except GitHub's own API, directly from your browser.
+
+Setup (one time, per device):
+1. Create a private GitHub repo to hold your data (separate from any app-code repo, so your personal data never ends up in a public repo).
+2. Generate a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) scoped to **only that repo**, with "Contents: Read and write" permission — nothing broader.
+3. Paste the token, repo owner, and repo name into the Cloud sync dialog and click "Save settings".
+
+Then, on any device: click "⬆ Push to cloud" after making changes, and "⬇ Pull from cloud" on another device to catch up. Sync is manual and explicit in both directions — nothing happens automatically, and pulling always asks you to confirm before overwriting local data. Because the token is a sensitive credential, it's stored only in that browser's local storage and isn't included in Export/Import backups; you'll need to paste it again on each new device.
