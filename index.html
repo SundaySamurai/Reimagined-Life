@@ -229,6 +229,26 @@ const DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE = [
   { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
 ];
 
+// Honda's Maintenance Minder adapts to driving conditions rather than printing one
+// fixed table, so these are the commonly-documented mileages tied to each Minder
+// code (A/B = oil, sub-items 1-7) for a 3rd-gen (2007-2011) CR-V — a solid baseline,
+// but less exact than a single official chart. Verify against your own manual/dash
+// codes over time. The 2.4L engine uses a timing chain, so no belt to track.
+const DEFAULT_MAINTENANCE_TEMPLATES_HONDA_CRV_GEN3 = [
+  { name: "Oil & filter change", intervalMiles: 7500, intervalMonths: 12 },
+  { name: "Tire rotation", intervalMiles: 7500, intervalMonths: 12 },
+  { name: "Engine air filter, cabin air filter & drive belt inspection", intervalMiles: 15000, intervalMonths: 24 },
+  { name: "Transmission fluid change", intervalMiles: 30000, intervalMonths: 36 },
+  { name: "Spark plugs & valve clearance inspection", intervalMiles: 105000, intervalMonths: 120 },
+  { name: "Engine coolant replacement", intervalMiles: 30000, intervalMonths: 36 },
+  { name: "Rear differential fluid change (AWD only — skip/delete if FWD)", intervalMiles: 30000, intervalMonths: 36 },
+  { name: "Brake fluid replacement", intervalMiles: null, intervalMonths: 36 },
+  { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
+];
+function isHondaCRV(v) {
+  return /honda/i.test(v.make || "") && /cr-?v/i.test(v.model || "");
+}
+
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
@@ -499,8 +519,11 @@ function renderVehicleDetail(v) {
   <div class="card">`;
 
   if (itemsSorted.length === 0) {
+    const templateLabel = v.type === "Motorcycle" ? "motorcycle "
+      : isHondaCRV(v) ? "Honda CR-V "
+      : "";
     html += `<p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults.</p>
-      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common ${v.type === "Motorcycle" ? "motorcycle " : ""}maintenance items</button>`;
+      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common ${templateLabel}maintenance items</button>`;
   } else {
     itemsSorted.forEach(({ item, s }) => {
       const badgeCls = s.status;
@@ -914,7 +937,9 @@ async function confirmLogService(vehicleId, itemId) {
 function addDefaultTemplates(vehicleId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
   v.maintenanceItems = v.maintenanceItems || [];
-  const templates = v.type === "Motorcycle" ? DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE : DEFAULT_MAINTENANCE_TEMPLATES;
+  const templates = v.type === "Motorcycle" ? DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE
+    : isHondaCRV(v) ? DEFAULT_MAINTENANCE_TEMPLATES_HONDA_CRV_GEN3
+    : DEFAULT_MAINTENANCE_TEMPLATES;
   templates.forEach(t => {
     // Snap to the most recent point in this item's cycle at or below the current
     // mileage, rather than assuming everything was just serviced today — so a
