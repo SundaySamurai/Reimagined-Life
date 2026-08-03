@@ -213,18 +213,19 @@ const DEFAULT_MAINTENANCE_TEMPLATES = [
   { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
 ];
 
-// Based on Royal Enfield's official minor/major service structure (5,000km/6mo minor,
-// 10,000km/12mo major) — a reasonable single-cylinder motorcycle baseline; edit intervals
-// per your bike/manual as needed.
+// Sourced directly from the Royal Enfield Hunter 350 owner's manual periodic
+// maintenance chart (pages 87-91, items 11-35), using the manual's own km/mile/month
+// conversions. The manual notes that past 50,000 km you just repeat this same cycle,
+// which the app's recurring intervals already do automatically.
 const DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE = [
-  { name: "First service (oil, filter & full inspection)", intervalMiles: 500, intervalMonths: 1 },
-  { name: "Oil & filter change (minor service)", intervalMiles: 3000, intervalMonths: 6 },
-  { name: "Major service (valve clearance, spark plug, air filter, throttle body)", intervalMiles: 6000, intervalMonths: 12 },
+  { name: "First service (oil, filter & full inspection)", intervalMiles: 300, intervalMonths: 2 },
   { name: "Chain cleaning, lubrication & tension check", intervalMiles: 300, intervalMonths: null },
-  { name: "Brake fluid & brake system check", intervalMiles: null, intervalMonths: 12 },
-  { name: "Tire pressure & tread check", intervalMiles: null, intervalMonths: 1 },
-  { name: "Battery terminals & charge check", intervalMiles: null, intervalMonths: 6 },
-  { name: "Nuts, bolts & fasteners torque check", intervalMiles: null, intervalMonths: 6 },
+  { name: "Clutch, brake lever & pedal free-play adjustment", intervalMiles: 600, intervalMonths: null },
+  { name: "Minor service (multi-point inspection, lubrication, throttle cable & steering check)", intervalMiles: 3000, intervalMonths: 6 },
+  { name: "Major service (oil, valve clearance, spark plug, air filter, throttle body clean)", intervalMiles: 6000, intervalMonths: 12 },
+  { name: "Spoke tightness / wheel rim runout check", intervalMiles: 6000, intervalMonths: 12 },
+  { name: "Front fork oil & front brake fluid replacement", intervalMiles: 12000, intervalMonths: 24 },
+  { name: "Fuel filter replacement", intervalMiles: 15000, intervalMonths: 30 },
   { name: "Registration / inspection", intervalMiles: null, intervalMonths: 12 },
 ];
 
