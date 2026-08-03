@@ -9,17 +9,36 @@ A single-file web app for tracking vehicle maintenance schedules and warranty co
 - **Status at a glance** — each item is flagged OK, Due soon, or Overdue based on your vehicle's current mileage and today's date.
 - **Warranty tracking** — record warranty coverage (provider, expiration date/mileage, notes) and optionally link it to a maintenance item. If that item comes due while the warranty is still active, you'll see a "may be covered under warranty" note.
 - **Calendar reminders** — each due item has an "Add reminder" link that opens a pre-filled Google Calendar event (one click to save — no sign-in or API setup required).
-- **Local storage** — all data stays in your browser. Use the Export/Import buttons to back up or move your data.
+- **Photo upload for receipts and odometer readings** — attach a photo of a service receipt to a maintenance log entry, or a photo of your odometer to a mileage update. The app scans the photo on-device (no internet, no account) and tries to auto-fill the date, cost, and mileage for you to review before saving.
+- **Service and mileage history** — every logged service and every mileage update is kept (with its photo, if attached), viewable per maintenance item or per vehicle.
+- **Local storage** — all data (and photos) stays on your device. Use the Export/Import buttons to back up or move your data, including photos.
 
 ## Usage
 
-1. Open `index.html` in any modern browser (double-click it, or serve it with any static file server).
+1. Serve `index.html` with a local static server (see note below on why this matters) and open it in a modern browser.
 2. Add a vehicle with its current mileage.
 3. Add maintenance items — either "Add common maintenance items" for a quick starting set, or add your own with custom intervals.
-4. When you get service done, click "Log done" and enter the date/mileage — the next due date/mileage recalculates automatically.
-5. Add any warranties (bumper-to-bumper, powertrain, extended, etc.) and link them to the maintenance items they cover.
-6. Click "Export data" occasionally to save a JSON backup, since everything lives in your browser's local storage.
+4. When you get service done, click "Log done". Optionally attach a photo of the receipt — the app will try to read the date, cost, and service details off it automatically; review and edit before saving. The next due date/mileage recalculates automatically.
+5. To update your mileage, click "Update mileage" and optionally attach a photo of your odometer — the app will try to read the number and suggest it for you to confirm.
+6. Add any warranties (bumper-to-bumper, powertrain, extended, etc.) and link them to the maintenance items they cover.
+7. Click "History" on any maintenance item, or "Mileage history" on a vehicle, to see past entries and view attached photos.
+8. Click "Export data" occasionally to save a JSON backup (this includes your photos), since everything lives in your browser's local storage/IndexedDB.
 
 ## Notes on Google Calendar integration
 
 This app doesn't do full automatic calendar sync — that requires a hosted OAuth setup with Google, which isn't practical for a plain local HTML file. Instead, each due/upcoming maintenance item gets a one-click "Add reminder" link that opens Google Calendar with the event pre-filled; you just hit save. If you'd like true automatic sync (events created for you without a click) or hosted access from multiple devices, that would need a small backend — let me know if you want that built out.
+
+## Notes on photo scanning (OCR)
+
+Text recognition runs fully on-device using a vendored copy of [Tesseract.js](https://github.com/naptha/tesseract.js) (see `vendor/tesseract/`) — no photo or data ever leaves your browser, and no internet connection is needed once the page is loaded.
+
+**Important:** the OCR feature (and only that feature) requires the app to be served over `http://` or `https://` rather than opened directly as a `file://` path, because browsers block the background Web Worker it needs when running from a raw file. If you just double-click `index.html`, everything else works fine — you just won't get auto-fill from photos, and you'll see a message saying so; you can still attach the photo and type the details in yourself.
+
+To serve it locally, run one of these from the project folder and open the printed URL:
+```
+python3 -m http.server 8080
+# or
+npx serve
+```
+
+Scanning accuracy depends on photo clarity — always double-check the auto-filled fields before saving.

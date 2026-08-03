@@ -193,6 +193,7 @@
 
 <dialog id="dialog"></dialog>
 
+<script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 /* ---------------- Data layer ---------------- */
 const STORAGE_KEY = "vehicleMaintenanceTracker.v1";
@@ -225,6 +226,123 @@ function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); 
 
 let state = loadData();
 let currentVehicleId = null;
+let pendingReceiptFile = null;
+let pendingMileagePhotoFile = null;
+
+/* ---------------- Photo storage (IndexedDB) ---------------- */
+const PHOTO_DB_NAME = "vmtPhotosDB";
+const PHOTO_STORE = "photos";
+
+function openPhotoDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(PHOTO_DB_NAME, 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore(PHOTO_STORE); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function savePhotoBlob(id, blob) {
+  const db = await openPhotoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, "readwrite");
+    tx.objectStore(PHOTO_STORE).put(blob, id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function getPhotoBlob(id) {
+  const db = await openPhotoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, "readonly");
+    const req = tx.objectStore(PHOTO_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function deletePhotoBlob(id) {
+  const db = await openPhotoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, "readwrite");
+    tx.objectStore(PHOTO_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+async function dataURLToBlob(dataURL) {
+  const res = await fetch(dataURL);
+  return res.blob();
+}
+
+/* ---------------- OCR (Tesseract.js, vendored locally) ---------------- */
+let ocrWorkerPromise = null;
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = (async () => {
+      if (typeof Tesseract === "undefined") throw new Error("OCR engine script not loaded");
+      return Tesseract.createWorker("eng", 1, {
+        workerPath: "vendor/tesseract/worker.min.js",
+        corePath: "vendor/tesseract/tesseract-core-lstm.wasm.js",
+        langPath: "vendor/tesseract/",
+        cacheMethod: "none",
+        gzip: true,
+      });
+    })();
+  }
+  return ocrWorkerPromise;
+}
+async function scanImageText(file) {
+  const worker = await getOcrWorker();
+  const { data } = await worker.recognize(file);
+  return data.text;
+}
+
+/* ---------------- Receipt/odometer text parsing heuristics ---------------- */
+function guessDateFromText(text) {
+  const now = new Date();
+  const candidates = [];
+  for (const m of text.matchAll(/\b(20\d{2})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/g)) {
+    candidates.push(new Date(+m[1], +m[2] - 1, +m[3]));
+  }
+  for (const m of text.matchAll(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/g)) {
+    let y = +m[3];
+    if (y < 100) y += y < 50 ? 2000 : 1900;
+    candidates.push(new Date(y, +m[1] - 1, +m[2]));
+  }
+  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  for (const m of text.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b/gi)) {
+    const mi = months.indexOf(m[1].toLowerCase());
+    candidates.push(new Date(+m[3], mi, +m[2]));
+  }
+  const valid = candidates.filter(d => !isNaN(d) && d.getFullYear() >= 1990 && d <= new Date(now.getTime() + 86400000));
+  if (valid.length === 0) return null;
+  valid.sort((a, b) => b - a);
+  return valid[0].toISOString().slice(0, 10);
+}
+function guessCostFromText(text) {
+  // Match "total" but not as part of "subtotal" (negative lookbehind), and prefer
+  // the last such match — the grand total typically appears after subtotal/tax lines.
+  const totalMatches = [...text.matchAll(/(?<!sub)\btotal\b[^\d$]{0,15}\$?\s?(\d{1,5}(?:,\d{3})*\.\d{2})/gi)];
+  if (totalMatches.length) {
+    return parseFloat(totalMatches[totalMatches.length - 1][1].replace(/,/g, ""));
+  }
+  const amounts = [...text.matchAll(/\$\s?(\d{1,5}(?:,\d{3})*\.\d{2})/g)].map(m => parseFloat(m[1].replace(/,/g, "")));
+  if (amounts.length === 0) return null;
+  return Math.max(...amounts);
+}
+function guessMileageCandidates(text) {
+  const nums = [...text.matchAll(/\b(\d{3,7})\b/g)].map(m => m[1]).filter(s => !/^0+$/.test(s));
+  const uniq = [...new Set(nums)];
+  uniq.sort((a, b) => b.length - a.length || (+b - +a));
+  return uniq.slice(0, 5).map(s => parseInt(s, 10));
+}
 
 /* ---------------- Date/mileage math ---------------- */
 function addMonths(iso, months) {
@@ -353,6 +471,7 @@ function renderVehicleDetail(v) {
     <div class="stat-strip">
       <div class="stat">Current mileage: <b>${v.mileage.toLocaleString()} mi</b></div>
       <button class="small" onclick="openMileageForm('${v.id}')">Update mileage</button>
+      <button class="small" onclick="openMileageHistory('${v.id}')">Mileage history (${(v.mileageLog || []).length})</button>
     </div>
   </div>
 
@@ -391,6 +510,7 @@ function renderVehicleDetail(v) {
           <span class="badge ${badgeCls}">${badgeLabel}</span>
           ${calLink ? `<a class="btn small" target="_blank" href="${calLink}">📅 Add reminder</a>` : ""}
           <button class="small" onclick="logService('${v.id}','${item.id}')">Log done</button>
+          <button class="small" onclick="openHistory('${v.id}','${item.id}')">History (${(item.history || []).length})</button>
           <button class="small" onclick="openMaintenanceForm('${v.id}','${item.id}')">Edit</button>
           <button class="small danger" onclick="deleteMaintenance('${v.id}','${item.id}')">Delete</button>
         </div>
@@ -520,8 +640,14 @@ function deleteVehicle(id) {
 }
 function openMileageForm(vehicleId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
+  pendingMileagePhotoFile = null;
   showDialog(`
     <h3>Update mileage</h3>
+    <label>Odometer photo (optional) — scan to auto-fill the number</label>
+    <input id="f-mileagephoto" type="file" accept="image/*" capture="environment" onchange="handleMileagePhotoSelected(event)" />
+    <div id="f-mileagephoto-status" class="vehicle-meta"></div>
+    <img id="f-mileagephoto-preview" style="max-width:100%;border-radius:8px;margin-top:6px;display:none;" />
+    <div id="f-mileage-candidates" class="checklist"></div>
     <label>Current odometer reading</label>
     <input id="f-newmileage" type="number" value="${v.mileage}" />
     <div class="dialog-actions">
@@ -530,12 +656,76 @@ function openMileageForm(vehicleId) {
     </div>
   `);
 }
-function saveMileage(vehicleId) {
+async function handleMileagePhotoSelected(evt) {
+  const file = evt.target.files[0];
+  if (!file) return;
+  pendingMileagePhotoFile = file;
+  const preview = document.getElementById("f-mileagephoto-preview");
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = "block";
+  const status = document.getElementById("f-mileagephoto-status");
+  status.textContent = "Scanning odometer…";
+  try {
+    const text = await scanImageText(file);
+    const candidates = guessMileageCandidates(text);
+    const box = document.getElementById("f-mileage-candidates");
+    if (candidates.length) {
+      box.innerHTML = candidates.map(n =>
+        `<button type="button" class="small" onclick="document.getElementById('f-newmileage').value=${n}">${n.toLocaleString()} mi</button>`
+      ).join("");
+      document.getElementById("f-newmileage").value = candidates[0];
+      status.textContent = "Scanned — pick the correct number above or edit it directly.";
+    } else {
+      status.textContent = "Couldn't find a clear number in the photo — please enter it manually.";
+    }
+  } catch (e) {
+    console.error(e);
+    status.textContent = "Automatic scanning isn't available right now — you can still attach the photo and enter the mileage manually. (This needs the app served over http/https, not opened directly as a file.)";
+  }
+}
+async function saveMileage(vehicleId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
-  v.mileage = parseInt(document.getElementById("f-newmileage").value, 10) || v.mileage;
+  const mileage = parseInt(document.getElementById("f-newmileage").value, 10) || v.mileage;
+  const entry = { id: uid(), date: todayISO(), mileage, photoId: null };
+  if (pendingMileagePhotoFile) {
+    entry.photoId = uid();
+    try { await savePhotoBlob(entry.photoId, pendingMileagePhotoFile); }
+    catch (e) { console.error("Failed to store odometer photo", e); entry.photoId = null; }
+  }
+  v.mileage = mileage;
+  v.mileageLog = v.mileageLog || [];
+  v.mileageLog.push(entry);
+  pendingMileagePhotoFile = null;
   saveData();
   closeDialog();
   render();
+}
+function openMileageHistory(vehicleId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const log = (v.mileageLog || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const rows = log.map(h => `
+    <div class="item-row">
+      <div class="item-name">${h.date} &middot; ${h.mileage.toLocaleString()} mi</div>
+      <div class="item-actions">
+        ${h.photoId ? `<button class="small" onclick="viewPhoto('${h.photoId}')">📷 View</button>` : ""}
+        <button class="small danger" onclick="deleteMileageEntry('${vehicleId}','${h.id}')">Delete</button>
+      </div>
+    </div>`).join("") || `<p class="vehicle-meta">No mileage updates logged yet.</p>`;
+  showDialog(`<h3>Mileage history</h3>${rows}<div class="dialog-actions"><button onclick="closeDialog()">Close</button></div>`);
+}
+async function deleteMileageEntry(vehicleId, entryId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const entry = (v.mileageLog || []).find(h => h.id === entryId);
+  if (entry && entry.photoId) { try { await deletePhotoBlob(entry.photoId); } catch (e) { console.error(e); } }
+  v.mileageLog = (v.mileageLog || []).filter(h => h.id !== entryId);
+  saveData();
+  openMileageHistory(vehicleId);
+}
+async function viewPhoto(photoId) {
+  const blob = await getPhotoBlob(photoId);
+  if (!blob) { alert("Photo not found on this device."); return; }
+  const url = URL.createObjectURL(blob);
+  showDialog(`<h3>Photo</h3><img src="${url}" style="max-width:100%;border-radius:8px;" /><div class="dialog-actions"><button onclick="closeDialog()">Close</button></div>`);
 }
 
 /* ---------------- Maintenance item form ---------------- */
@@ -596,27 +786,100 @@ function deleteMaintenance(vehicleId, itemId) {
   saveData();
   render();
 }
+function openHistory(vehicleId, itemId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = v.maintenanceItems.find(i => i.id === itemId);
+  const history = (item.history || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const rows = history.map(h => `
+    <div class="item-row">
+      <div>
+        <div class="item-name">${h.date || "—"} &middot; ${h.mileage != null ? h.mileage.toLocaleString() + " mi" : ""}</div>
+        <div class="item-detail">${h.cost != null ? "$" + h.cost.toFixed(2) : ""}${h.notes ? " — " + escapeHtml(h.notes).slice(0, 120) : ""}</div>
+      </div>
+      <div class="item-actions">
+        ${h.photoId ? `<button class="small" onclick="viewPhoto('${h.photoId}')">📷 View</button>` : ""}
+        <button class="small danger" onclick="deleteHistoryEntry('${vehicleId}','${itemId}','${h.id}')">Delete</button>
+      </div>
+    </div>`).join("") || `<p class="vehicle-meta">No service history logged yet.</p>`;
+  showDialog(`<h3>History — ${escapeHtml(item.name)}</h3>${rows}<div class="dialog-actions"><button onclick="closeDialog()">Close</button></div>`);
+}
+async function deleteHistoryEntry(vehicleId, itemId, entryId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = v.maintenanceItems.find(i => i.id === itemId);
+  const entry = (item.history || []).find(h => h.id === entryId);
+  if (entry && entry.photoId) { try { await deletePhotoBlob(entry.photoId); } catch (e) { console.error(e); } }
+  item.history = (item.history || []).filter(h => h.id !== entryId);
+  saveData();
+  openHistory(vehicleId, itemId);
+}
 function logService(vehicleId, itemId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
   const item = v.maintenanceItems.find(i => i.id === itemId);
+  pendingReceiptFile = null;
   showDialog(`
     <h3>Log "${escapeHtml(item.name)}" as done</h3>
+    <label>Receipt photo (optional) — scan to auto-fill details</label>
+    <input id="f-donephoto" type="file" accept="image/*" capture="environment" onchange="handleReceiptPhotoSelected(event)" />
+    <div id="f-donephoto-status" class="vehicle-meta"></div>
+    <img id="f-donephoto-preview" style="max-width:100%;border-radius:8px;margin-top:6px;display:none;" />
     <label>Date performed</label>
     <input id="f-donedate" type="date" value="${todayISO()}" />
     <label>Mileage at time of service</label>
     <input id="f-donemiles" type="number" value="${v.mileage}" />
+    <label>Cost (optional)</label>
+    <input id="f-donecost" type="number" step="0.01" placeholder="e.g. 54.99" />
+    <label>Notes (optional)</label>
+    <textarea id="f-donenotes" placeholder="Anything else you'd like to remember about this service"></textarea>
     <div class="dialog-actions">
       <button onclick="closeDialog()">Cancel</button>
       <button class="primary" onclick="confirmLogService('${vehicleId}','${itemId}')">Save</button>
     </div>
   `);
 }
-function confirmLogService(vehicleId, itemId) {
+async function handleReceiptPhotoSelected(evt) {
+  const file = evt.target.files[0];
+  if (!file) return;
+  pendingReceiptFile = file;
+  const preview = document.getElementById("f-donephoto-preview");
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = "block";
+  const status = document.getElementById("f-donephoto-status");
+  status.textContent = "Scanning receipt…";
+  try {
+    const text = await scanImageText(file);
+    const date = guessDateFromText(text);
+    const cost = guessCostFromText(text);
+    if (date) document.getElementById("f-donedate").value = date;
+    if (cost != null) document.getElementById("f-donecost").value = cost.toFixed(2);
+    const notesEl = document.getElementById("f-donenotes");
+    if (!notesEl.value.trim()) notesEl.value = text.trim().slice(0, 500);
+    status.textContent = "Scanned — please review the fields below before saving.";
+  } catch (e) {
+    console.error(e);
+    status.textContent = "Automatic scanning isn't available right now — you can still attach the photo and fill in the fields manually. (This needs the app served over http/https, not opened directly as a file.)";
+  }
+}
+async function confirmLogService(vehicleId, itemId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
   const item = v.maintenanceItems.find(i => i.id === itemId);
-  item.lastServiceDate = document.getElementById("f-donedate").value || todayISO();
-  item.lastServiceMileage = parseInt(document.getElementById("f-donemiles").value, 10) || v.mileage;
-  if (item.lastServiceMileage > v.mileage) v.mileage = item.lastServiceMileage;
+  const date = document.getElementById("f-donedate").value || todayISO();
+  const mileage = parseInt(document.getElementById("f-donemiles").value, 10) || v.mileage;
+  const costRaw = document.getElementById("f-donecost").value;
+  const cost = costRaw ? parseFloat(costRaw) : null;
+  const notes = document.getElementById("f-donenotes").value.trim();
+
+  const entry = { id: uid(), date, mileage, cost, notes, photoId: null };
+  if (pendingReceiptFile) {
+    entry.photoId = uid();
+    try { await savePhotoBlob(entry.photoId, pendingReceiptFile); }
+    catch (e) { console.error("Failed to store receipt photo", e); entry.photoId = null; }
+  }
+  item.history = item.history || [];
+  item.history.push(entry);
+  item.lastServiceDate = date;
+  item.lastServiceMileage = mileage;
+  if (mileage > v.mileage) v.mileage = mileage;
+  pendingReceiptFile = null;
   saveData();
   closeDialog();
   render();
@@ -687,14 +950,36 @@ function deleteWarranty(vehicleId, warrantyId) {
 }
 
 /* ---------------- Import / export ---------------- */
-document.getElementById("exportBtn").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `vehicle-maintenance-backup-${todayISO()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+document.getElementById("exportBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("exportBtn");
+  const originalLabel = btn.textContent;
+  btn.textContent = "Exporting…";
+  btn.disabled = true;
+  try {
+    const photoIds = new Set();
+    state.vehicles.forEach(v => {
+      (v.mileageLog || []).forEach(e => e.photoId && photoIds.add(e.photoId));
+      (v.maintenanceItems || []).forEach(i => (i.history || []).forEach(e => e.photoId && photoIds.add(e.photoId)));
+    });
+    const photos = {};
+    for (const id of photoIds) {
+      try {
+        const blob = await getPhotoBlob(id);
+        if (blob) photos[id] = await blobToDataURL(blob);
+      } catch (e) { console.error("Failed to export photo", id, e); }
+    }
+    const exportObj = { ...state, photos };
+    const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `vehicle-maintenance-backup-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    btn.textContent = originalLabel;
+    btn.disabled = false;
+  }
 });
 document.getElementById("importBtn").addEventListener("click", () => {
   document.getElementById("importFile").click();
@@ -703,17 +988,26 @@ document.getElementById("importFile").addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = JSON.parse(reader.result);
       if (!parsed.vehicles) throw new Error("Invalid file");
       if (confirm("This will replace your current data with the imported backup. Continue?")) {
+        const photos = parsed.photos || {};
+        delete parsed.photos;
         state = parsed;
         saveData();
+        for (const [id, dataURL] of Object.entries(photos)) {
+          try {
+            const blob = await dataURLToBlob(dataURL);
+            await savePhotoBlob(id, blob);
+          } catch (e) { console.error("Failed to import photo", id, e); }
+        }
         currentVehicleId = null;
         render();
       }
     } catch (err) {
+      console.error(err);
       alert("Could not read that file as a valid backup.");
     }
   };
