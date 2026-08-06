@@ -1,8 +1,8 @@
-# Vehicle Maintenance Tracker
+# Vasquez's Maintenance Tracker
 
-A single-file web app for tracking vehicle maintenance schedules and warranty coverage. No build step, no account, no backend — just open `index.html` in a browser.
+A single-file web app for tracking vehicle and household maintenance. No build step, no account, no backend — just open `index.html` in a browser. Switch between the **🚗 Vehicles** and **🏠 Household** tabs at the top; each keeps its own data but shares the same local storage, export/import, and cloud sync.
 
-## Features
+## Vehicle tracker features
 
 - **Multiple vehicles** — track as many cars, SUVs, trucks, or motorcycles as you own.
 - **Maintenance schedule** by mileage and/or date (whichever comes first), with common presets (oil change, tire rotation, brake inspection, etc.) plus custom items. Motorcycles get their own preset list — the built-in defaults are taken directly from the Royal Enfield Hunter 350 owner's manual periodic maintenance chart. A 2010-era Honda CR-V (make "Honda", model containing "CR-V") also gets its own preset based on Honda's documented Maintenance Minder intervals for that generation. Edit intervals to match your specific vehicle/manual if different.
@@ -15,7 +15,17 @@ A single-file web app for tracking vehicle maintenance schedules and warranty co
 - **Local storage** — all data (and photos) stays on your device by default. Use the Export/Import buttons to back up or move your data, including photos.
 - **Cloud sync across devices** — optionally sync your data (and photos) to a private GitHub repo you own, so the same data shows up on your phone and laptop. Explicit "Push" and "Pull" buttons, no automatic background syncing.
 
-## Usage
+## Household tracker features
+
+Built for a condo owner who needs to separate "my job" from "the HOA's job" at a glance.
+
+- **Location + responsibility tagging** — every item is tagged `inside_unit` / `outside_unit` and `personal` / `association` / `limited_common_element` / `verify`. Color encodes responsibility (blue = personal, gray = association, teal = limited common element, amber = verify/unconfirmed), a small house/building icon encodes location, and safety-critical tasks get a red badge and outline that never blends into a routine item.
+- **Comprehensive default catalog** — ~40 common condo items across HVAC, water heater, plumbing, kitchen appliances, laundry, structural/exterior, safety, electrical, and lawn/irrigation, each with suggested location, responsibility, and task intervals pulled straight from the spec. Picking a catalog item pre-fills everything as an editable suggestion; nothing is locked in. You can also add a fully custom item ("Other" category, blank form).
+- **Two dashboard views** — **My To-Do** (personal-responsibility tasks only, the action list) and **Property Overview** (everything, including HOA/shared items, shown as awareness/tracking with a lighter-weight "Log" action instead of full one-tap controls). Both are sorted by urgency (overdue → due this month → due this quarter → later) with safety-critical overdue items surfaced above routine ones in the same bucket — never sorted by category.
+- **One-tap Done, plus Skip and N/A** — click "✓ Done" straight from the list to log a completion with today's date and no form. "Detail" expands an optional cost/method/note before logging. "Skip" advances the schedule without a full log. "N/A" retires a task (e.g., you sold the item) without deleting its history — reactivate it later from the item page.
+- **Browser notifications** — click "🔔 Enable reminders" to get local due-date notifications. Safety-critical tasks get a heads-up 14 days out plus a due/overdue notice; routine tasks get a single notice at the due date. This is a simple client-side check (fires while the tab is open/foregrounded), not a background push service.
+
+## Usage — Vehicles
 
 1. Serve `index.html` with a local static server (see note below on why this matters) and open it in a modern browser.
 2. Add a vehicle with its current mileage.
@@ -25,6 +35,15 @@ A single-file web app for tracking vehicle maintenance schedules and warranty co
 6. Add any warranties (bumper-to-bumper, powertrain, extended, etc.) and link them to the maintenance items they cover.
 7. Click "History" on any maintenance item, or "Mileage history" on a vehicle, to see past entries and view attached photos.
 8. Click "Export data" occasionally to save a JSON backup (this includes your photos), since everything lives in your browser's local storage/IndexedDB.
+
+## Usage — Household
+
+1. Click the "🏠 Household" tab.
+2. Click "+ Add Item", pick a category, then either pick a catalog preset (pre-fills location/responsibility/tasks, all editable) or "-- Custom (blank) --" to enter everything yourself.
+3. Review/edit the item's fields and save — you land on the item's detail page where its tasks (if any came from the catalog) are already listed. Add more tasks with "+ Add task".
+4. Use "My To-Do" for what's yours to handle, "Property Overview" for everything including the HOA's/shared items.
+5. Log work with "✓ Done" (instant, no form), "Detail" (adds cost/method/note), "Skip" (pushes the due date without a full log), or "N/A" (retires a task you no longer need to track).
+6. Click "🔔 Enable reminders" once to allow browser notifications for upcoming/overdue tasks.
 
 ## Notes on Google Calendar integration
 

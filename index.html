@@ -191,16 +191,70 @@
     text-align: center;
   }
   .toast.show { opacity: 0.95; }
+
+  /* App tabs */
+  .app-tabs { display: flex; gap: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
+  .tab-btn { border: none; background: transparent; padding: 6px 12px; border-radius: 8px; font-size: 0.85rem; }
+  .tab-btn.active { background: var(--accent); color: white; }
+  .sub-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .sub-tab-btn { border-radius: 999px; padding: 6px 14px; font-size: 0.85rem; }
+  .sub-tab-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+  /* Household tracker — responsibility color encoding */
+  .resp-personal { --resp: #2563eb; --resp-bg: #dbeafe; }
+  .resp-association { --resp: #64748b; --resp-bg: #e2e8f0; }
+  .resp-limited-common-element { --resp: #0d9488; --resp-bg: #ccfbf1; }
+  .resp-verify { --resp: #b45309; --resp-bg: #fef3c7; }
+  @media (prefers-color-scheme: dark) {
+    .resp-personal { --resp: #60a5fa; --resp-bg: #1e3a5f; }
+    .resp-association { --resp: #94a3b8; --resp-bg: #2b3946; }
+    .resp-limited-common-element { --resp: #2dd4bf; --resp-bg: #0f3d38; }
+    .resp-verify { --resp: #fbbf24; --resp-bg: #3a2e0d; }
+  }
+  .task-row {
+    border-left: 4px solid var(--resp);
+    background: var(--resp-bg);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .task-row.safety { outline: 2px solid var(--bad); outline-offset: -2px; }
+  .task-main { display: flex; flex-direction: column; gap: 2px; }
+  .task-title-line { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text); flex-wrap: wrap; }
+  .task-sub { font-size: 0.78rem; color: var(--muted); }
+  .resp-pill {
+    font-size: 0.7rem; font-weight: 700; color: var(--resp);
+    background: var(--card); border: 1px solid var(--resp);
+    padding: 1px 8px; border-radius: 999px;
+  }
+  .safety-badge {
+    font-size: 0.7rem; font-weight: 700; color: white; background: var(--bad);
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .due-label { font-size: 0.78rem; font-weight: 700; }
+  .due-label.overdue { color: var(--bad); }
+  .due-label.this_month { color: var(--warn); }
+  .due-label.this_quarter { color: var(--accent); }
+  .due-label.later { color: var(--muted); }
 </style>
 </head>
 <body>
 
 <header>
   <div>
-    <h1>🚗 Vasquez's maintenance tracker</h1>
-    <div class="sub">Track services, stay ahead of what's due, use your warranty before it lapses.</div>
+    <h1 id="appTitle">🚗 Vasquez's maintenance tracker</h1>
+    <div class="sub" id="appSub">Track services, stay ahead of what's due, use your warranty before it lapses.</div>
   </div>
   <div class="toolbar">
+    <div class="app-tabs">
+      <button class="tab-btn active" id="tab-vehicles" onclick="switchApp('vehicles')">🚗 Vehicles</button>
+      <button class="tab-btn" id="tab-household" onclick="switchApp('household')">🏠 Household</button>
+    </div>
     <button class="small" title="Sync your data to a private GitHub repo you own" onclick="openSyncSettings()">☁ Cloud sync</button>
     <button id="exportBtn" class="small" title="Backup your data as a JSON file">Export data</button>
     <button id="importBtn" class="small" title="Restore data from a JSON backup">Import data</button>
@@ -462,7 +516,23 @@ function warrantyStatus(w, vehicle) {
 /* ---------------- Rendering ---------------- */
 const app = document.getElementById("app");
 
+let activeApp = "vehicles";
+function switchApp(name) {
+  activeApp = name;
+  document.getElementById("tab-vehicles").classList.toggle("active", name === "vehicles");
+  document.getElementById("tab-household").classList.toggle("active", name === "household");
+  document.getElementById("appTitle").textContent = name === "vehicles" ? "🚗 Vasquez's maintenance tracker" : "🏠 Household maintenance tracker";
+  document.getElementById("appSub").textContent = name === "vehicles"
+    ? "Track services, stay ahead of what's due, use your warranty before it lapses."
+    : "Know what's yours to do, and what the HOA's got.";
+  render();
+}
+
 function render() {
+  if (activeApp === "household") return renderHouseholdApp();
+  return renderVehicleApp();
+}
+function renderVehicleApp() {
   if (currentVehicleId) {
     const v = state.vehicles.find(v => v.id === currentVehicleId);
     if (v) return renderVehicleDetail(v);
@@ -1041,6 +1111,693 @@ function deleteWarranty(vehicleId, warrantyId) {
   render();
 }
 
+/* ================================================================
+   Household Maintenance Tracker
+   ================================================================ */
+
+/* ---------------- Data layer ---------------- */
+const HOUSEHOLD_STORAGE_KEY = "householdMaintenanceTracker.v1";
+
+function loadHouseholdData() {
+  try {
+    const raw = localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { console.error("Failed to load household data", e); }
+  return { items: [] };
+}
+function saveHouseholdData() {
+  localStorage.setItem(HOUSEHOLD_STORAGE_KEY, JSON.stringify(householdState));
+  if (!suppressDirtyTracking) markDirtyAndScheduleAutoPush();
+}
+let householdState = loadHouseholdData();
+let currentHouseholdItemId = null;
+let currentHouseholdView = "todo"; // 'todo' | 'overview'
+let pendingHouseholdPresetTasks = [];
+let pendingHouseholdIsCustom = true;
+
+const RESPONSIBILITY_LABELS = {
+  personal: "Personal",
+  association: "Association",
+  limited_common_element: "Limited Common Element",
+  verify: "Verify",
+};
+
+/* ---------------- Default catalog ---------------- */
+// Suggested defaults only — location/responsibility/intervals are all editable after adding.
+// Non-personal defaults default to "verify" unless the responsibility is obvious and unambiguous,
+// per the MVP spec's guidance to never silently assume something isn't the owner's job.
+const HOUSEHOLD_CATALOG = {
+  "HVAC": [
+    { name: "Air Handler", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Replace filter", interval_type: "months", interval_value: 2, hint: "every 1–3 months depending on filter/MERV rating" },
+      { name: "Professional tune-up", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "Condenser Unit", location: "outside_unit", responsibility: "verify",
+      responsibility_note: "Confirm with your HOA/CC&Rs — condenser servicing responsibility varies by community.",
+      tasks: [
+        { name: "Professional tune-up", interval_type: "months", interval_value: 12 },
+      ]},
+    { name: "Ductwork", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Inspect/clean", interval_type: "years", interval_value: 4, hint: "every 3–5 years" },
+    ]},
+    { name: "Thermostat", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Battery check", interval_type: "months", interval_value: 12 },
+    ]},
+  ],
+  "Water Heater": [
+    { name: "Water Heater", location: "outside_unit", responsibility: "association", tasks: [
+      { name: "Anode rod inspection", interval_type: "years", interval_value: 2, hint: "every 2–3 years" },
+      { name: "Tank flush/sediment", interval_type: "months", interval_value: 12 },
+      { name: "TPR valve test", interval_type: "months", interval_value: 12 },
+      { name: "Full replacement window flag", interval_type: "years", interval_value: 10, hint: "typical lifespan 8–12 years from install" },
+    ]},
+  ],
+  "Plumbing": [
+    { name: "Kitchen Faucet", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Aerator clean/cartridge check", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "Bathroom Faucet(s)", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Aerator clean/cartridge check", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "Toilet(s)", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Flapper/fill valve check", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "Water Softener", location: "inside_unit", responsibility: "verify",
+      responsibility_note: "Location varies by unit — confirm setup and who's responsible.",
+      tasks: [{ name: "Salt refill", interval_type: "months", interval_value: 1, hint: "every 1–2 months" }] },
+    { name: "Sump Pump", location: "inside_unit", responsibility: "verify",
+      responsibility_note: "Confirm location and responsibility for your unit.",
+      tasks: [{ name: "Test pump + battery backup", interval_type: "months", interval_value: 6 }] },
+    { name: "Supply Lines/Shutoff Valves", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Inspection", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "Whole-house/RO Filter", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Filter/membrane change", interval_type: "months", interval_value: 9, hint: "every 6–12 months" },
+    ]},
+  ],
+  "Kitchen Appliance": [
+    { name: "Refrigerator", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Water filter", interval_type: "months", interval_value: 6 },
+      { name: "Condenser coil cleaning", interval_type: "months", interval_value: 9, hint: "every 6–12 months" },
+    ]},
+    { name: "Dishwasher", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Filter cleaning", interval_type: "months", interval_value: 3 },
+    ]},
+    { name: "Oven/Range", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Hood filter clean", interval_type: "months", interval_value: 3 },
+    ]},
+    { name: "Garbage Disposal", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Clean/inspect", interval_type: "months", interval_value: 3 },
+    ]},
+  ],
+  "Laundry": [
+    { name: "Washer", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Supply hose inspection", interval_type: "months", interval_value: 12, hint: "flag hose replacement at 5 years" },
+      { name: "Gasket/seal cleaning", interval_type: "months", interval_value: 3 },
+    ]},
+    { name: "Dryer", location: "inside_unit", responsibility: "personal",
+      notes: "Clean the lint trap after every use.",
+      tasks: [
+        { name: "Vent duct cleaning", interval_type: "months", interval_value: 12, safety_critical: true },
+      ]},
+  ],
+  "Structural/Exterior": [
+    { name: "Roof", location: "outside_unit", responsibility: "association", tasks: [] },
+    { name: "Balcony/Patio Surface", location: "outside_unit", responsibility: "limited_common_element", tasks: [
+      { name: "Surface maintenance", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "Balcony/Patio Structure", location: "outside_unit", responsibility: "association", tasks: [] },
+    { name: "Windows", location: "inside_unit", responsibility: "verify",
+      responsibility_note: "Boundary element — window/caulking responsibility is often split between owner and HOA; confirm.",
+      tasks: [{ name: "Caulking/weatherstrip check", interval_type: "months", interval_value: 12 }] },
+  ],
+  "Safety": [
+    { name: "Smoke Detector(s)", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Battery replacement", interval_type: "months", interval_value: 6, safety_critical: true },
+      { name: "Full unit replacement", interval_type: "years", interval_value: 10, safety_critical: true },
+    ]},
+    { name: "CO Detector(s)", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Battery/unit check", interval_type: "months", interval_value: 6, safety_critical: true },
+    ]},
+    { name: "Fire Extinguisher", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Pressure gauge check", interval_type: "months", interval_value: 12, safety_critical: true },
+    ]},
+    { name: "Dryer Vent", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Cleaning", interval_type: "months", interval_value: 12, safety_critical: true },
+    ]},
+    { name: "Garage Door Spring/Opener", location: "outside_unit", responsibility: "verify",
+      responsibility_note: "Confirm location and responsibility for your unit.",
+      tasks: [{ name: "Inspection", interval_type: "months", interval_value: 12, safety_critical: true }] },
+  ],
+  "Electrical": [
+    { name: "Electrical Panel", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Visual inspection", interval_type: "months", interval_value: 12 },
+    ]},
+    { name: "GFCI Outlets", location: "inside_unit", responsibility: "personal", tasks: [
+      { name: "Test button check", interval_type: "months", interval_value: 6 },
+    ]},
+  ],
+  "Lawn/Exterior": [
+    { name: "Irrigation System", location: "outside_unit", responsibility: "verify",
+      responsibility_note: "Confirm HOA vs. personal responsibility for irrigation.",
+      tasks: [
+        { name: "Spring startup", interval_type: "months", interval_value: 12 },
+        { name: "Fall blowout", interval_type: "months", interval_value: 12 },
+      ]},
+  ],
+};
+
+/* ---------------- Date/interval math ---------------- */
+function addInterval(iso, type, value) {
+  if (type === "days") {
+    const d = new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + value);
+    return d.toISOString().slice(0, 10);
+  }
+  if (type === "weeks") {
+    const d = new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + value * 7);
+    return d.toISOString().slice(0, 10);
+  }
+  if (type === "years") return addMonths(iso, value * 12);
+  return addMonths(iso, value);
+}
+function intervalLabel(type, value) {
+  const unit = { days: "day", weeks: "week", months: "month", years: "year" }[type] || type;
+  return `every ${value} ${unit}${value === 1 ? "" : "s"}`;
+}
+function computeTaskStatus(task, item) {
+  if (task.inactive) return { nextDueDate: null, daysRemaining: null, bucket: "inactive" };
+  const base = task.last_completed_date || item.install_date || item.createdAt || todayISO();
+  const nextDueDate = addInterval(base, task.interval_type, task.interval_value);
+  const daysRemaining = daysBetween(nextDueDate);
+  let bucket;
+  if (daysRemaining < 0) bucket = "overdue";
+  else if (daysRemaining <= 30) bucket = "this_month";
+  else if (daysRemaining <= 90) bucket = "this_quarter";
+  else bucket = "later";
+  return { nextDueDate, daysRemaining, bucket };
+}
+function responsibilityClass(r) { return `resp-${(r || "verify").replace(/_/g, "-")}`; }
+function locationIcon(loc) { return loc === "outside_unit" ? "🏢" : "🏠"; }
+
+function allHouseholdTaskRows({ personalOnly } = {}) {
+  const rows = [];
+  householdState.items.forEach(item => {
+    (item.tasks || []).forEach(task => {
+      if (task.inactive) return;
+      if (personalOnly && item.responsibility !== "personal") return;
+      rows.push({ item, task, status: computeTaskStatus(task, item) });
+    });
+  });
+  const bucketOrder = { overdue: 0, this_month: 1, this_quarter: 2, later: 3 };
+  rows.sort((a, b) => {
+    const bo = bucketOrder[a.status.bucket] - bucketOrder[b.status.bucket];
+    if (bo !== 0) return bo;
+    const sc = (b.task.safety_critical ? 1 : 0) - (a.task.safety_critical ? 1 : 0);
+    if (sc !== 0) return sc;
+    return (a.status.daysRemaining ?? 0) - (b.status.daysRemaining ?? 0);
+  });
+  return rows;
+}
+
+/* ---------------- Rendering ---------------- */
+function renderHouseholdApp() {
+  if (currentHouseholdItemId) {
+    const item = householdState.items.find(i => i.id === currentHouseholdItemId);
+    if (item) return renderHouseholdItemDetail(item);
+    currentHouseholdItemId = null;
+  }
+  renderHouseholdList();
+}
+function openHouseholdItem(id) { currentHouseholdItemId = id; render(); }
+function goHouseholdHome() { currentHouseholdItemId = null; render(); }
+function switchHouseholdView(view) { currentHouseholdView = view; currentHouseholdItemId = null; render(); }
+
+function renderTaskRow({ item, task, status }, opts = {}) {
+  if (task.inactive) {
+    return `<div class="task-row ${responsibilityClass(item.responsibility)}" style="opacity:0.6;">
+      <div class="task-main">
+        <div class="task-title-line">
+          <span>${locationIcon(item.location)}</span>
+          <span>${escapeHtml(item.name)} — ${escapeHtml(task.task_name)}</span>
+          <span class="resp-pill">${RESPONSIBILITY_LABELS[item.responsibility] || "Verify"}</span>
+        </div>
+        <div class="task-sub">Marked not applicable</div>
+      </div>
+    </div>`;
+  }
+  const dueLabelText = status.bucket === "overdue"
+    ? `Overdue${status.daysRemaining < 0 ? ` (${Math.abs(status.daysRemaining)}d)` : ""}`
+    : `Due ${status.nextDueDate}`;
+  const showFullActions = item.responsibility === "personal" || !opts.awarenessOnly;
+  const actionsHtml = showFullActions
+    ? `<button class="small primary" onclick="quickCompleteTask('${item.id}','${task.id}')">✓ Done</button>
+       <button class="small" onclick="expandCompleteTask('${item.id}','${task.id}')">Detail</button>
+       <button class="small" onclick="skipTask('${item.id}','${task.id}')">Skip</button>
+       <button class="small danger" onclick="markTaskNA('${item.id}','${task.id}')">N/A</button>`
+    : `<button class="small" onclick="expandCompleteTask('${item.id}','${task.id}')">Log</button>`;
+  return `<div class="task-row ${responsibilityClass(item.responsibility)} ${task.safety_critical ? "safety" : ""}">
+    <div class="task-main" onclick="openHouseholdItem('${item.id}')" style="cursor:pointer;">
+      <div class="task-title-line">
+        <span>${locationIcon(item.location)}</span>
+        <span>${escapeHtml(item.name)} — ${escapeHtml(task.task_name)}</span>
+        ${task.safety_critical ? `<span class="safety-badge">⚠ Safety</span>` : ""}
+        <span class="resp-pill">${RESPONSIBILITY_LABELS[item.responsibility] || "Verify"}</span>
+      </div>
+      <div class="task-sub">${escapeHtml(item.category)} &middot; ${intervalLabel(task.interval_type, task.interval_value)}${item.responsibility_note ? " &middot; " + escapeHtml(item.responsibility_note) : ""}</div>
+    </div>
+    <div class="item-actions">
+      <span class="due-label ${status.bucket}">${dueLabelText}</span>
+      ${actionsHtml}
+    </div>
+  </div>`;
+}
+
+function renderHouseholdList() {
+  let html = `<div class="sub-tabs">
+    <button class="sub-tab-btn ${currentHouseholdView === "todo" ? "active" : ""}" onclick="switchHouseholdView('todo')">My To-Do</button>
+    <button class="sub-tab-btn ${currentHouseholdView === "overview" ? "active" : ""}" onclick="switchHouseholdView('overview')">Property Overview</button>
+  </div>
+  <div class="toolbar" style="margin-bottom:16px;">
+    <button class="primary" onclick="openAddHouseholdItem()">+ Add Item</button>
+    <button class="small" onclick="requestHouseholdNotifications()">🔔 Enable reminders</button>
+  </div>`;
+
+  const rows = allHouseholdTaskRows({ personalOnly: currentHouseholdView === "todo" });
+
+  if (householdState.items.length === 0) {
+    html += `<div class="empty card">
+      <p>No household items yet. Add one from the catalog or create your own.</p>
+      <button class="primary" onclick="openAddHouseholdItem()">+ Add Item</button>
+    </div>`;
+  } else if (rows.length === 0) {
+    html += `<div class="empty card"><p>${currentHouseholdView === "todo" ? "Nothing on your personal to-do list right now." : "No tracked tasks yet."}</p></div>`;
+  } else {
+    html += rows.map(r => renderTaskRow(r, { awarenessOnly: currentHouseholdView === "overview" })).join("");
+  }
+
+  if (currentHouseholdView === "overview") {
+    const noTaskItems = householdState.items.filter(i => !(i.tasks && i.tasks.length));
+    if (noTaskItems.length) {
+      html += `<div class="section-title"><h3>Tracking only (no scheduled tasks)</h3></div>`;
+      noTaskItems.forEach(item => {
+        html += `<div class="card ${responsibilityClass(item.responsibility)}" style="border-left:4px solid var(--resp); cursor:pointer;" onclick="openHouseholdItem('${item.id}')">
+          <div class="task-title-line">
+            <span>${locationIcon(item.location)}</span>
+            <span style="font-weight:600;">${escapeHtml(item.name)}</span>
+            <span class="resp-pill">${RESPONSIBILITY_LABELS[item.responsibility] || "Verify"}</span>
+          </div>
+          <div class="task-sub">${escapeHtml(item.category)}${item.responsibility_note ? " &middot; " + escapeHtml(item.responsibility_note) : ""}</div>
+        </div>`;
+      });
+    }
+  }
+
+  app.innerHTML = html;
+}
+
+function renderHouseholdItemDetail(item) {
+  const tasks = item.tasks || [];
+  const bucketOrder = { overdue: 0, this_month: 1, this_quarter: 2, later: 3, inactive: 4 };
+  const rows = tasks.map(task => ({ item, task, status: computeTaskStatus(task, item) }))
+    .sort((a, b) => bucketOrder[a.status.bucket] - bucketOrder[b.status.bucket]);
+
+  let html = `<span class="back-link" onclick="goHouseholdHome()">&larr; All household items</span>
+  <div class="card ${responsibilityClass(item.responsibility)}" style="border-left:4px solid var(--resp);">
+    <div class="vehicle-head">
+      <div>
+        <h2>${locationIcon(item.location)} ${escapeHtml(item.name)} <span class="resp-pill">${RESPONSIBILITY_LABELS[item.responsibility] || "Verify"}</span></h2>
+        <div class="vehicle-meta">${escapeHtml(item.category)}${item.brand ? " &middot; " + escapeHtml(item.brand) : ""}${item.model ? " " + escapeHtml(item.model) : ""}${item.install_date ? " &middot; installed " + item.install_date : ""}</div>
+        ${item.responsibility_note ? `<div class="warranty-note">${escapeHtml(item.responsibility_note)}</div>` : ""}
+        ${item.notes ? `<div class="item-detail" style="margin-top:6px;">${escapeHtml(item.notes)}</div>` : ""}
+      </div>
+      <div class="item-actions">
+        <button class="small" onclick="openHouseholdItemForm('${item.id}')">Edit</button>
+        <button class="small danger" onclick="deleteHouseholdItem('${item.id}')">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">
+    <h3>Tasks</h3>
+    <button class="small primary" onclick="openHouseholdTaskForm('${item.id}')">+ Add task</button>
+  </div>`;
+
+  if (rows.length === 0) {
+    html += `<div class="card"><p class="vehicle-meta">No tasks yet for this item.</p></div>`;
+  } else {
+    html += rows.map(r => `<div>${renderTaskRow(r)}
+      <div style="margin:-6px 0 10px 4px;">
+        <button class="small" onclick="openHouseholdTaskForm('${item.id}','${r.task.id}')">Edit task</button>
+        <button class="small" onclick="openHouseholdTaskHistory('${item.id}','${r.task.id}')">History (${(r.task.history || []).length})</button>
+        <button class="small danger" onclick="deleteHouseholdTask('${item.id}','${r.task.id}')">Delete task</button>
+        ${r.task.inactive ? `<button class="small" onclick="reactivateTask('${item.id}','${r.task.id}')">Reactivate</button>` : ""}
+      </div>
+    </div>`).join("");
+  }
+
+  app.innerHTML = html;
+}
+
+/* ---------------- Add item flow (catalog or custom) ---------------- */
+function openAddHouseholdItem() {
+  const categories = Object.keys(HOUSEHOLD_CATALOG);
+  showDialog(`
+    <h3>Add household item</h3>
+    <label>Category</label>
+    <select id="f-h-category" onchange="onHouseholdCategoryChange()">
+      ${categories.map(c => `<option value="${c}">${c}</option>`).join("")}
+      <option value="Other">Other</option>
+    </select>
+    <label>Starting point</label>
+    <select id="f-h-preset" onchange="onHouseholdPresetChange()"></select>
+    <div id="f-h-preset-hint" class="vehicle-meta" style="margin-top:8px;"></div>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="continueAddHouseholdItem()">Next</button>
+    </div>
+  `);
+  onHouseholdCategoryChange();
+}
+function onHouseholdCategoryChange() {
+  const category = document.getElementById("f-h-category").value;
+  const presetSelect = document.getElementById("f-h-preset");
+  const entries = HOUSEHOLD_CATALOG[category] || [];
+  presetSelect.innerHTML = `<option value="">-- Custom (blank) --</option>` +
+    entries.map((e, idx) => `<option value="${idx}">${escapeHtml(e.name)}</option>`).join("");
+  onHouseholdPresetChange();
+}
+function onHouseholdPresetChange() {
+  const category = document.getElementById("f-h-category").value;
+  const idx = document.getElementById("f-h-preset").value;
+  const hint = document.getElementById("f-h-preset-hint");
+  if (idx === "" || !HOUSEHOLD_CATALOG[category]) { hint.textContent = ""; return; }
+  const preset = HOUSEHOLD_CATALOG[category][idx];
+  const taskSummary = (preset.tasks || []).map(t => `${t.name} (${intervalLabel(t.interval_type, t.interval_value)})`).join(", ");
+  hint.innerHTML = `Suggested: ${locationIcon(preset.location)} ${preset.location.replace(/_/g, " ")} &middot; ${RESPONSIBILITY_LABELS[preset.responsibility]}${taskSummary ? " &middot; Tasks: " + escapeHtml(taskSummary) : " &middot; tracking only, no personal tasks"}<br>All of this is editable next.`;
+}
+function continueAddHouseholdItem() {
+  const category = document.getElementById("f-h-category").value;
+  const idx = document.getElementById("f-h-preset").value;
+  const preset = (idx !== "" && HOUSEHOLD_CATALOG[category]) ? HOUSEHOLD_CATALOG[category][idx] : null;
+  closeDialog();
+  openHouseholdItemForm(null, { category, preset });
+}
+
+/* ---------------- Item form ---------------- */
+function openHouseholdItemForm(itemId, prefill) {
+  const item = itemId ? householdState.items.find(i => i.id === itemId) : null;
+  const preset = prefill && prefill.preset;
+  pendingHouseholdPresetTasks = (!item && preset) ? (preset.tasks || []) : [];
+  pendingHouseholdIsCustom = item ? item.is_custom : !preset;
+
+  const categories = [...Object.keys(HOUSEHOLD_CATALOG), "Other"];
+  const category = item ? item.category : (prefill ? prefill.category : categories[0]);
+  const name = item ? item.name : (preset ? preset.name : "");
+  const location = item ? item.location : (preset ? preset.location : "inside_unit");
+  const responsibility = item ? item.responsibility : (preset ? preset.responsibility : "verify");
+  const responsibilityNote = item ? item.responsibility_note : (preset ? (preset.responsibility_note || "") : "");
+  const notes = item ? item.notes : (preset ? (preset.notes || "") : "");
+
+  showDialog(`
+    <h3>${item ? "Edit" : "Add"} household item</h3>
+    <label>Name</label>
+    <input id="f-h-name" value="${escapeHtml(name)}" placeholder="e.g. Kitchen Fridge" />
+    <label>Category</label>
+    <select id="f-h-cat">${categories.map(c => `<option value="${c}" ${c === category ? "selected" : ""}>${c}</option>`).join("")}</select>
+    <div class="row">
+      <div><label>Location</label>
+        <select id="f-h-loc">
+          <option value="inside_unit" ${location === "inside_unit" ? "selected" : ""}>Inside unit</option>
+          <option value="outside_unit" ${location === "outside_unit" ? "selected" : ""}>Outside unit</option>
+        </select>
+      </div>
+      <div><label>Responsibility</label>
+        <select id="f-h-resp">
+          ${["personal", "association", "limited_common_element", "verify"].map(r => `<option value="${r}" ${responsibility === r ? "selected" : ""}>${RESPONSIBILITY_LABELS[r]}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <label>Responsibility note (optional)</label>
+    <textarea id="f-h-respnote" placeholder="e.g. surface only, structure is HOA per Art. 7.3">${escapeHtml(responsibilityNote || "")}</textarea>
+    <div class="row">
+      <div><label>Brand (optional)</label><input id="f-h-brand" value="${item ? escapeHtml(item.brand || "") : ""}" /></div>
+      <div><label>Model (optional)</label><input id="f-h-model" value="${item ? escapeHtml(item.model || "") : ""}" /></div>
+      <div><label>Install date (optional)</label><input id="f-h-install" type="date" value="${item ? item.install_date || "" : ""}" /></div>
+    </div>
+    <label>Notes</label>
+    <textarea id="f-h-notes">${escapeHtml(notes || "")}</textarea>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="saveHouseholdItemForm(${item ? `'${item.id}'` : "null"})">Save</button>
+    </div>
+  `);
+}
+function saveHouseholdItemForm(itemId) {
+  const name = document.getElementById("f-h-name").value.trim();
+  if (!name) return;
+  const category = document.getElementById("f-h-cat").value;
+  const location = document.getElementById("f-h-loc").value;
+  const responsibility = document.getElementById("f-h-resp").value;
+  const responsibility_note = document.getElementById("f-h-respnote").value.trim();
+  const brand = document.getElementById("f-h-brand").value.trim();
+  const model = document.getElementById("f-h-model").value.trim();
+  const install_date = document.getElementById("f-h-install").value || null;
+  const notes = document.getElementById("f-h-notes").value.trim();
+
+  if (itemId) {
+    const item = householdState.items.find(i => i.id === itemId);
+    Object.assign(item, { name, category, location, responsibility, responsibility_note, brand, model, install_date, notes });
+  } else {
+    const newItem = {
+      id: uid(), name, category, location, responsibility, responsibility_note,
+      brand, model, install_date, notes,
+      is_custom: pendingHouseholdIsCustom,
+      createdAt: todayISO(),
+      tasks: [],
+    };
+    pendingHouseholdPresetTasks.forEach(t => {
+      newItem.tasks.push({
+        id: uid(), task_name: t.name, interval_type: t.interval_type, interval_value: t.interval_value,
+        last_completed_date: null, safety_critical: !!t.safety_critical, history: [], inactive: false,
+      });
+    });
+    householdState.items.push(newItem);
+    itemId = newItem.id;
+  }
+  saveHouseholdData();
+  closeDialog();
+  currentHouseholdItemId = itemId;
+  render();
+}
+function deleteHouseholdItem(itemId) {
+  if (!confirm("Delete this item and all its tasks/history?")) return;
+  householdState.items = householdState.items.filter(i => i.id !== itemId);
+  saveHouseholdData();
+  goHouseholdHome();
+}
+
+/* ---------------- Task form ---------------- */
+function openHouseholdTaskForm(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = taskId ? item.tasks.find(t => t.id === taskId) : null;
+  showDialog(`
+    <h3>${task ? "Edit" : "Add"} task</h3>
+    <label>Task name</label>
+    <input id="f-h-taskname" value="${task ? escapeHtml(task.task_name) : ""}" placeholder="e.g. Replace filter" />
+    <div class="row">
+      <div><label>Interval</label>
+        <select id="f-h-intervaltype">
+          ${["days", "weeks", "months", "years"].map(t => `<option value="${t}" ${(task ? task.interval_type : "months") === t ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+      </div>
+      <div><label>Every</label><input id="f-h-intervalvalue" type="number" min="1" value="${task ? task.interval_value : 12}" /></div>
+    </div>
+    <label>Last completed (optional)</label>
+    <input id="f-h-lastdone" type="date" value="${task ? task.last_completed_date || "" : ""}" />
+    <div class="checklist">
+      <label><input type="checkbox" id="f-h-safety" ${task && task.safety_critical ? "checked" : ""} /> Safety-critical</label>
+    </div>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="saveHouseholdTaskForm('${itemId}'${task ? `,'${task.id}'` : ""})">Save</button>
+    </div>
+  `);
+}
+function saveHouseholdTaskForm(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task_name = document.getElementById("f-h-taskname").value.trim();
+  if (!task_name) return;
+  const interval_type = document.getElementById("f-h-intervaltype").value;
+  const interval_value = parseInt(document.getElementById("f-h-intervalvalue").value, 10) || 1;
+  const last_completed_date = document.getElementById("f-h-lastdone").value || null;
+  const safety_critical = document.getElementById("f-h-safety").checked;
+
+  item.tasks = item.tasks || [];
+  if (taskId) {
+    const task = item.tasks.find(t => t.id === taskId);
+    Object.assign(task, { task_name, interval_type, interval_value, last_completed_date, safety_critical });
+  } else {
+    item.tasks.push({ id: uid(), task_name, interval_type, interval_value, last_completed_date, safety_critical, history: [], inactive: false });
+  }
+  saveHouseholdData();
+  closeDialog();
+  render();
+}
+function deleteHouseholdTask(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  item.tasks = item.tasks.filter(t => t.id !== taskId);
+  saveHouseholdData();
+  render();
+}
+
+/* ---------------- Completion actions (Done / Skip / N/A) ---------------- */
+function quickCompleteTask(itemId, taskId) {
+  completeHouseholdTask(itemId, taskId, { date: todayISO(), method: "diy", cost: null, note: "" });
+}
+function completeHouseholdTask(itemId, taskId, entry) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  task.history = task.history || [];
+  task.history.push({ id: uid(), completed_date: entry.date, method: entry.method, cost: entry.cost, note: entry.note });
+  task.last_completed_date = entry.date;
+  saveHouseholdData();
+  render();
+  showToast(`✓ Marked "${task.task_name}" done.`);
+}
+function expandCompleteTask(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  showDialog(`
+    <h3>Log "${escapeHtml(task.task_name)}" done</h3>
+    <label>Date completed</label>
+    <input id="f-h-donedate" type="date" value="${todayISO()}" />
+    <label>Method</label>
+    <select id="f-h-donemethod">
+      <option value="diy">DIY</option>
+      <option value="professional">Professional</option>
+      <option value="reported_to_hoa">Reported to HOA</option>
+    </select>
+    <label>Cost (optional)</label>
+    <input id="f-h-donecost" type="number" step="0.01" placeholder="e.g. 45.00" />
+    <label>Note (optional)</label>
+    <textarea id="f-h-donenote"></textarea>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="confirmExpandComplete('${itemId}','${taskId}')">Save</button>
+    </div>
+  `);
+}
+function confirmExpandComplete(itemId, taskId) {
+  const date = document.getElementById("f-h-donedate").value || todayISO();
+  const method = document.getElementById("f-h-donemethod").value;
+  const costRaw = document.getElementById("f-h-donecost").value;
+  const cost = costRaw ? parseFloat(costRaw) : null;
+  const note = document.getElementById("f-h-donenote").value.trim();
+  closeDialog();
+  completeHouseholdTask(itemId, taskId, { date, method, cost, note });
+}
+function skipTask(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  task.history = task.history || [];
+  task.history.push({ id: uid(), completed_date: todayISO(), method: null, cost: null, note: "Skipped" });
+  task.last_completed_date = todayISO();
+  saveHouseholdData();
+  render();
+  showToast(`Skipped "${task.task_name}" — pushed to next interval.`);
+}
+function markTaskNA(itemId, taskId) {
+  if (!confirm("Mark this task as not applicable? It'll be hidden from your lists — you can reactivate it later from the item page.")) return;
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  task.inactive = true;
+  saveHouseholdData();
+  render();
+}
+function reactivateTask(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  task.inactive = false;
+  saveHouseholdData();
+  render();
+}
+
+/* ---------------- Completion history ---------------- */
+function openHouseholdTaskHistory(itemId, taskId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  const history = (task.history || []).slice().sort((a, b) => (b.completed_date || "").localeCompare(a.completed_date || ""));
+  const methodLabel = { diy: "DIY", professional: "Professional", reported_to_hoa: "Reported to HOA" };
+  const rows = history.map(h => `
+    <div class="item-row">
+      <div>
+        <div class="item-name">${h.completed_date || "—"}${h.method ? " &middot; " + (methodLabel[h.method] || h.method) : ""}</div>
+        <div class="item-detail">${h.cost != null ? "$" + h.cost.toFixed(2) + " &middot; " : ""}${h.note ? escapeHtml(h.note) : ""}</div>
+      </div>
+      <div class="item-actions">
+        <button class="small danger" onclick="deleteHouseholdHistoryEntry('${itemId}','${taskId}','${h.id}')">Delete</button>
+      </div>
+    </div>`).join("") || `<p class="vehicle-meta">No history yet.</p>`;
+  showDialog(`<h3>History — ${escapeHtml(task.task_name)}</h3>${rows}<div class="dialog-actions"><button onclick="closeDialog()">Close</button></div>`);
+}
+function deleteHouseholdHistoryEntry(itemId, taskId, entryId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  task.history = (task.history || []).filter(h => h.id !== entryId);
+  saveHouseholdData();
+  openHouseholdTaskHistory(itemId, taskId);
+}
+
+/* ---------------- Notifications ---------------- */
+const HOUSEHOLD_NOTIFIED_KEY = "householdNotified.v1";
+function loadNotifiedLog() {
+  try { return JSON.parse(localStorage.getItem(HOUSEHOLD_NOTIFIED_KEY) || "{}"); } catch (e) { return {}; }
+}
+function saveNotifiedLog(log) { localStorage.setItem(HOUSEHOLD_NOTIFIED_KEY, JSON.stringify(log)); }
+
+function requestHouseholdNotifications() {
+  if (!("Notification" in window)) { showToast("Notifications aren't supported in this browser."); return; }
+  Notification.requestPermission().then(perm => {
+    if (perm === "granted") { showToast("🔔 Reminders enabled."); checkHouseholdNotifications(); }
+    else showToast("Notifications weren't enabled.");
+  });
+}
+function fireHouseholdNotification(item, task, status) {
+  new Notification(`${task.safety_critical ? "⚠ Safety — " : ""}${item.name}: ${task.task_name}`, {
+    body: status.bucket === "overdue" ? "Overdue" : `Due ${status.nextDueDate}`,
+    tag: `${task.id}-${status.nextDueDate}`,
+  });
+}
+// Simple due-date-based checks, no smart timing: safety-critical tasks get a 14-day heads-up
+// plus a due-day/overdue notice; routine tasks get a single notice at the due date/overdue.
+function checkHouseholdNotifications() {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const log = loadNotifiedLog();
+  let changed = false;
+  householdState.items.forEach(item => {
+    (item.tasks || []).forEach(task => {
+      if (task.inactive) return;
+      const status = computeTaskStatus(task, item);
+      if (status.bucket === "inactive") return;
+      const points = task.safety_critical ? [14, 0] : [0];
+      points.forEach(p => {
+        if (status.daysRemaining !== p) return;
+        const key = `${task.id}:${p}:${status.nextDueDate}`;
+        if (log[key]) return;
+        fireHouseholdNotification(item, task, status);
+        log[key] = true; changed = true;
+      });
+      if (status.bucket === "overdue") {
+        const key = `${task.id}:overdue:${status.nextDueDate}`;
+        if (!log[key]) { fireHouseholdNotification(item, task, status); log[key] = true; changed = true; }
+      }
+    });
+  });
+  if (changed) saveNotifiedLog(log);
+}
+
 /* ---------------- Cloud sync (your own private GitHub repo) ---------------- */
 const SYNC_CONFIG_KEY = "vmtSyncConfig.v1";
 const SYNC_FILE_PATH = "data.json";
@@ -1368,14 +2125,18 @@ async function buildBackupPayload() {
       if (blob) photos[id] = await blobToDataURL(blob);
     } catch (e) { console.error("Failed to read photo for backup", id, e); }
   }
-  return { ...state, photos };
+  return { ...state, household: householdState, photos };
 }
 async function applyBackupPayload(parsed) {
   if (!parsed || !parsed.vehicles) throw new Error("Invalid backup data");
   const photos = parsed.photos || {};
+  const household = parsed.household || { items: [] };
   delete parsed.photos;
+  delete parsed.household;
   state = parsed;
+  householdState = household;
   saveData();
+  saveHouseholdData();
   for (const [id, dataURL] of Object.entries(photos)) {
     try {
       const blob = await dataURLToBlob(dataURL);
@@ -1383,6 +2144,7 @@ async function applyBackupPayload(parsed) {
     } catch (e) { console.error("Failed to restore photo", id, e); }
   }
   currentVehicleId = null;
+  currentHouseholdItemId = null;
   render();
 }
 
@@ -1431,8 +2193,10 @@ document.getElementById("importFile").addEventListener("change", (e) => {
 /* ---------------- Init ---------------- */
 render();
 autoSyncCheck();
+checkHouseholdNotifications();
+setInterval(checkHouseholdNotifications, 60 * 60 * 1000);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") autoSyncCheck();
+  if (document.visibilityState === "visible") { autoSyncCheck(); checkHouseholdNotifications(); }
 });
 window.addEventListener("focus", () => autoSyncCheck());
 </script>
