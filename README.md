@@ -1,4 +1,4 @@
-# Vehicle Maintenance Tracker
+# Upkeep
 
 A single-file web app for tracking vehicle maintenance schedules and warranty coverage. No build step, no account, no backend — just open `index.html` in a browser.
 
