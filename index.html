@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Vasquez's maintenance tracker</title>
+<title>Upkeep</title>
 <style>
   :root {
     --bg: #f4f6f8;
@@ -247,7 +247,7 @@
 
 <header>
   <div>
-    <h1 id="appTitle">🚗 Vasquez's maintenance tracker</h1>
+    <h1 id="appTitle">🚗 Upkeep</h1>
     <div class="sub" id="appSub">Track services, stay ahead of what's due, use your warranty before it lapses.</div>
   </div>
   <div class="toolbar">
@@ -521,7 +521,7 @@ function switchApp(name) {
   activeApp = name;
   document.getElementById("tab-vehicles").classList.toggle("active", name === "vehicles");
   document.getElementById("tab-household").classList.toggle("active", name === "household");
-  document.getElementById("appTitle").textContent = name === "vehicles" ? "🚗 Vasquez's maintenance tracker" : "🏠 Household maintenance tracker";
+  document.getElementById("appTitle").textContent = name === "vehicles" ? "🚗 Upkeep — Vehicles" : "🏠 Upkeep — Household";
   document.getElementById("appSub").textContent = name === "vehicles"
     ? "Track services, stay ahead of what's due, use your warranty before it lapses."
     : "Know what's yours to do, and what the HOA's got.";

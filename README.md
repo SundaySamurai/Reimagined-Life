@@ -1,4 +1,4 @@
-# Vasquez's Maintenance Tracker
+# Upkeep
 
 A single-file web app for tracking vehicle and household maintenance. No build step, no account, no backend — just open `index.html` in a browser. Switch between the **🚗 Vehicles** and **🏠 Household** tabs at the top; each keeps its own data but shares the same local storage, export/import, and cloud sync.
 
