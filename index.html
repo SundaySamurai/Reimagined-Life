@@ -481,13 +481,22 @@ function computeItemStatus(item, vehicle) {
   if (item.intervalMiles) nextDueMiles = (item.lastServiceMileage ?? vehicle.mileage) + item.intervalMiles;
   if (item.intervalMonths) nextDueDate = addMonths(item.lastServiceDate || vehicle.createdAt, item.intervalMonths);
 
+  // A manual one-off reminder date (e.g. "mechanic said come back Dec 1") is independent of
+  // mileage/month math. It wins if it's sooner than the interval-computed date, or if there's
+  // no interval-computed date at all — covering items with only a manual reminder set.
+  let isManualReminder = false;
+  if (item.reminderDate && (nextDueDate === null || item.reminderDate < nextDueDate)) {
+    nextDueDate = item.reminderDate;
+    isManualReminder = true;
+  }
+
   const milesRemaining = nextDueMiles !== null ? nextDueMiles - vehicle.mileage : null;
   const daysRemaining = nextDueDate !== null ? daysBetween(nextDueDate) : null;
 
   const milesDueSoonThreshold = item.intervalMiles
     ? Math.min(DUE_SOON_MILES_MAX, Math.ceil(item.intervalMiles * DUE_SOON_FRACTION))
     : DUE_SOON_MILES_MAX;
-  const daysDueSoonThreshold = item.intervalMonths
+  const daysDueSoonThreshold = item.intervalMonths && !isManualReminder
     ? Math.min(DUE_SOON_DAYS_MAX, Math.ceil(item.intervalMonths * 30 * DUE_SOON_FRACTION))
     : DUE_SOON_DAYS_MAX;
 
@@ -497,7 +506,7 @@ function computeItemStatus(item, vehicle) {
   } else if ((milesRemaining !== null && milesRemaining <= milesDueSoonThreshold) || (daysRemaining !== null && daysRemaining <= daysDueSoonThreshold)) {
     status = "warn";
   }
-  return { nextDueMiles, nextDueDate, milesRemaining, daysRemaining, status };
+  return { nextDueMiles, nextDueDate, milesRemaining, daysRemaining, status, isManualReminder };
 }
 
 function warrantyStatus(w, vehicle) {
@@ -633,7 +642,7 @@ function renderVehicleDetail(v) {
       const badgeLabel = s.status === "bad" ? "Overdue" : s.status === "warn" ? "Due soon" : "OK";
       let detailParts = [];
       if (s.nextDueMiles !== null) detailParts.push(`next at ${s.nextDueMiles.toLocaleString()} mi`);
-      if (s.nextDueDate !== null) detailParts.push(`by ${s.nextDueDate}`);
+      if (s.nextDueDate !== null) detailParts.push(s.isManualReminder ? `reminder set for ${s.nextDueDate}` : `by ${s.nextDueDate}`);
       const linkedWarranty = warranties.find(w => w.id === item.warrantyId);
       let warrantyNote = "";
       if (linkedWarranty && (s.status === "bad" || s.status === "warn")) {
@@ -901,6 +910,9 @@ function openMaintenanceForm(vehicleId, itemId) {
       <div><label>Last done on (date)</label><input id="f-lastdate" type="date" value="${item ? item.lastServiceDate || "" : ""}" /></div>
       <div><label>Last done at (mileage)</label><input id="f-lastmiles" type="number" value="${item && item.lastServiceMileage != null ? item.lastServiceMileage : v.mileage}" /></div>
     </div>
+    <label>Reminder date (optional)</label>
+    <input id="f-reminderdate" type="date" value="${item ? item.reminderDate || "" : ""}" />
+    <div class="vehicle-meta" style="margin-top:2px;">For a specific one-off date regardless of mileage/interval — e.g. "shop said come back Dec 1 for the chain."</div>
     <label>Possibly covered by warranty</label>
     <select id="f-warranty">
       <option value="">None</option>
@@ -920,14 +932,15 @@ function saveMaintenanceForm(vehicleId, itemId) {
   const intervalMonths = parseInt(document.getElementById("f-intmonths").value, 10) || null;
   const lastServiceDate = document.getElementById("f-lastdate").value || null;
   const lastServiceMileage = document.getElementById("f-lastmiles").value ? parseInt(document.getElementById("f-lastmiles").value, 10) : null;
+  const reminderDate = document.getElementById("f-reminderdate").value || null;
   const warrantyId = document.getElementById("f-warranty").value || null;
 
   v.maintenanceItems = v.maintenanceItems || [];
   if (itemId) {
     const item = v.maintenanceItems.find(i => i.id === itemId);
-    Object.assign(item, { name, intervalMiles, intervalMonths, lastServiceDate, lastServiceMileage, warrantyId });
+    Object.assign(item, { name, intervalMiles, intervalMonths, lastServiceDate, lastServiceMileage, reminderDate, warrantyId });
   } else {
-    v.maintenanceItems.push({ id: uid(), name, intervalMiles, intervalMonths, lastServiceDate, lastServiceMileage, warrantyId });
+    v.maintenanceItems.push({ id: uid(), name, intervalMiles, intervalMonths, lastServiceDate, lastServiceMileage, reminderDate, warrantyId });
   }
   saveData();
   closeDialog();
@@ -1031,6 +1044,9 @@ async function confirmLogService(vehicleId, itemId) {
   item.history.push(entry);
   item.lastServiceDate = date;
   item.lastServiceMileage = mileage;
+  // A pure one-off reminder (no recurring interval) is fulfilled once logged — clear it so the
+  // item doesn't stay pinned to that now-past date forever. A recurring interval still applies.
+  if (item.reminderDate && !item.intervalMiles && !item.intervalMonths) item.reminderDate = null;
   if (mileage > v.mileage) v.mileage = mileage;
   pendingReceiptFile = null;
   saveData();
@@ -1925,6 +1941,15 @@ function markDirtyAndScheduleAutoPush() {
   clearTimeout(autoPushTimer);
   autoPushTimer = setTimeout(attemptAutoPush, AUTO_PUSH_DEBOUNCE_MS);
 }
+// Turns a fetch/push failure into a message that actually tells you what to do, instead of a
+// generic "something went wrong" — fine-grained GitHub tokens expire (401) and that's by far
+// the most common reason auto-sync silently stops working after it's been set up a while.
+function syncErrorToastMessage(e) {
+  if (e && e.status === 401) return "⚠ Cloud sync token invalid or expired — open Cloud sync to generate a new one.";
+  if (e && e.status === 404) return "⚠ Cloud sync repo/branch not found — check the owner/repo/branch in Cloud sync settings.";
+  if (e && e.status === 403) return "⚠ Cloud sync blocked (rate-limited or token lacks permission) — open Cloud sync to check.";
+  return "⚠ Auto-sync failed — open Cloud sync to check.";
+}
 async function attemptAutoPush() {
   const cfg = loadSyncConfig();
   if (!syncConfigured(cfg) || !cfg.dirty) return;
@@ -1942,7 +1967,7 @@ async function attemptAutoPush() {
     refreshSyncStatusIfDialogOpen();
   } catch (e) {
     console.error("Auto-push failed", e);
-    showToast("⚠ Auto-sync failed — open Cloud sync to check.");
+    showToast(syncErrorToastMessage(e));
   }
 }
 // Runs on load and whenever the app becomes visible again — pulls safely if nothing
@@ -1966,6 +1991,7 @@ async function autoSyncCheck() {
     }
   } catch (e) {
     console.error("Auto-sync check failed", e);
+    showToast(syncErrorToastMessage(e));
   }
 }
 
