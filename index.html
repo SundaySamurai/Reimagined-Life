@@ -598,10 +598,19 @@ function renderDashboard() {
   app.innerHTML = html;
 }
 
-function itemUrgencyKey(s) {
-  if (s.daysRemaining !== null) return s.daysRemaining;
-  if (s.milesRemaining !== null) return s.milesRemaining;
-  return Infinity;
+// Mileage and days aren't the same unit, so comparing their raw numbers against each other
+// (the old approach) produced a scrambled-looking order — an item 81 days out could sort
+// ahead of one 300 miles out just because 81 < 300 as bare numbers. Instead, items with a
+// mileage figure sort together by mileage first (most vehicle items are tracked against the
+// odometer day to day); items with no mileage figure at all follow, sorted by date.
+function compareItemUrgency(a, b) {
+  const aHasMiles = a.milesRemaining !== null;
+  const bHasMiles = b.milesRemaining !== null;
+  if (aHasMiles && bHasMiles) return a.milesRemaining - b.milesRemaining;
+  if (aHasMiles !== bHasMiles) return aHasMiles ? -1 : 1;
+  const aDays = a.daysRemaining !== null ? a.daysRemaining : Infinity;
+  const bDays = b.daysRemaining !== null ? b.daysRemaining : Infinity;
+  return aDays - bDays;
 }
 function renderMaintenanceItemRow(item, s, v, warranties) {
   const badgeCls = s.status;
@@ -662,7 +671,7 @@ function renderVehicleDetail(v) {
 
   const statused = items.map(item => ({ item, s: computeItemStatus(item, v) }));
   const pending = statused.filter(x => x.s.status === "bad")
-    .sort((a, b) => itemUrgencyKey(a.s) - itemUrgencyKey(b.s));
+    .sort((a, b) => compareItemUrgency(a.s, b.s));
   // An item with no active schedule (no interval, no reminder) that's actually been logged
   // done at least once — e.g. a one-time break-in service — is done for good, so it only
   // lives on in the Done feed from here on instead of sitting in Upcoming forever with "no
@@ -674,7 +683,7 @@ function renderVehicleDetail(v) {
     .sort((a, b) => {
       const order = { warn: 0, ok: 1 };
       const oc = order[a.s.status] - order[b.s.status];
-      return oc !== 0 ? oc : itemUrgencyKey(a.s) - itemUrgencyKey(b.s);
+      return oc !== 0 ? oc : compareItemUrgency(a.s, b.s);
     });
 
   let html = `<span class="back-link" onclick="goHome()">&larr; All vehicles</span>
