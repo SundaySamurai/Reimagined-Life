@@ -290,7 +290,10 @@ const DEFAULT_MAINTENANCE_TEMPLATES = [
 // conversions. The manual notes that past 50,000 km you just repeat this same cycle,
 // which the app's recurring intervals already do automatically.
 const DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE = [
-  { name: "First service (oil, filter & full inspection)", intervalMiles: 300, intervalMonths: 2 },
+  // This is a break-in service done exactly once early in the bike's life, not a recurring
+  // interval — no intervalMiles/intervalMonths, so once logged done it drops out of Upcoming
+  // for good instead of resurfacing every 300mi/2 months forever.
+  { name: "First service (oil, filter & full inspection)", intervalMiles: null, intervalMonths: null },
   { name: "Chain cleaning, lubrication & tension check", intervalMiles: 300, intervalMonths: null },
   { name: "Clutch, brake lever & pedal free-play adjustment", intervalMiles: 600, intervalMonths: null },
   { name: "Minor service (multi-point inspection, lubrication, throttle cable & steering check)", intervalMiles: 3000, intervalMonths: 6 },
@@ -647,6 +650,8 @@ function renderVehicleDoneFeed(v) {
       </div>
       <div class="item-actions">
         ${h.photoId ? `<button class="small" onclick="viewPhoto('${h.photoId}')">📷 View</button>` : ""}
+        <button class="small" onclick="editHistoryEntry('${v.id}','${item.id}','${h.id}')">Edit</button>
+        <button class="small danger" onclick="deleteHistoryEntryFromDone('${v.id}','${item.id}','${h.id}')">Delete</button>
       </div>
     </div>`).join("");
 }
@@ -658,7 +663,14 @@ function renderVehicleDetail(v) {
   const statused = items.map(item => ({ item, s: computeItemStatus(item, v) }));
   const pending = statused.filter(x => x.s.status === "bad")
     .sort((a, b) => itemUrgencyKey(a.s) - itemUrgencyKey(b.s));
-  const upcoming = statused.filter(x => x.s.status !== "bad")
+  // An item with no active schedule (no interval, no reminder) that's actually been logged
+  // done at least once — e.g. a one-time break-in service — is done for good, so it only
+  // lives on in the Done feed from here on instead of sitting in Upcoming forever with "no
+  // schedule set." Keyed off real history entries (the Done feed's source of truth), not
+  // just lastServiceDate, since a never-logged item with no schedule still needs a home.
+  const hasActiveSchedule = s => s.nextDueMiles !== null || s.nextDueDate !== null;
+  const hasCompletionRecord = item => !!(item.history && item.history.length);
+  const upcoming = statused.filter(x => x.s.status !== "bad" && (hasActiveSchedule(x.s) || !hasCompletionRecord(x.item)))
     .sort((a, b) => {
       const order = { warn: 0, ok: 1 };
       const oc = order[a.s.status] - order[b.s.status];
@@ -682,20 +694,22 @@ function renderVehicleDetail(v) {
       <button class="small" onclick="openMileageForm('${v.id}')">Update mileage</button>
       <button class="small" onclick="openMileageHistory('${v.id}')">Mileage history (${(v.mileageLog || []).length})</button>
     </div>
-  </div>
+  </div>`;
 
-  <div class="section-title">
+  const templateLabel = v.type === "Motorcycle" ? "motorcycle "
+    : isHondaCRV(v) ? "Honda CR-V "
+    : "";
+  html += `<div class="section-title">
     <h3>Maintenance</h3>
-    <button class="small primary" onclick="openMaintenanceForm('${v.id}')">+ Add item</button>
+    <div class="item-actions">
+      <button class="small" onclick="addDefaultTemplates('${v.id}')" title="Adds any standard ${templateLabel}items you don't already have — safe to click anytime, never creates duplicates">+ Add common ${templateLabel}items</button>
+      <button class="small primary" onclick="openMaintenanceForm('${v.id}')">+ Add item</button>
+    </div>
   </div>`;
 
   if (items.length === 0) {
-    const templateLabel = v.type === "Motorcycle" ? "motorcycle "
-      : isHondaCRV(v) ? "Honda CR-V "
-      : "";
     html += `<div class="card">
-      <p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults.</p>
-      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common ${templateLabel}maintenance items</button>
+      <p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults above.</p>
     </div>`;
   } else {
     html += `<div class="section-title"><h3>⚠️ Pending${pending.length ? ` (${pending.length})` : ""}</h3></div>
@@ -1022,19 +1036,72 @@ function openHistory(vehicleId, itemId) {
       </div>
       <div class="item-actions">
         ${h.photoId ? `<button class="small" onclick="viewPhoto('${h.photoId}')">📷 View</button>` : ""}
+        <button class="small" onclick="editHistoryEntry('${vehicleId}','${itemId}','${h.id}')">Edit</button>
         <button class="small danger" onclick="deleteHistoryEntry('${vehicleId}','${itemId}','${h.id}')">Delete</button>
       </div>
     </div>`).join("") || `<p class="vehicle-meta">No service history logged yet.</p>`;
   showDialog(`<h3>History — ${escapeHtml(item.name)}</h3>${rows}<div class="dialog-actions"><button onclick="closeDialog()">Close</button></div>`);
 }
-async function deleteHistoryEntry(vehicleId, itemId, entryId) {
+function removeHistoryEntry(vehicleId, itemId, entryId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
   const item = v.maintenanceItems.find(i => i.id === itemId);
   const entry = (item.history || []).find(h => h.id === entryId);
-  if (entry && entry.photoId) { try { await deletePhotoBlob(entry.photoId); } catch (e) { console.error(e); } }
+  const photoId = entry && entry.photoId;
   item.history = (item.history || []).filter(h => h.id !== entryId);
   saveData();
+  return photoId;
+}
+async function deleteHistoryEntry(vehicleId, itemId, entryId) {
+  const photoId = removeHistoryEntry(vehicleId, itemId, entryId);
+  if (photoId) { try { await deletePhotoBlob(photoId); } catch (e) { console.error(e); } }
   openHistory(vehicleId, itemId);
+}
+async function deleteHistoryEntryFromDone(vehicleId, itemId, entryId) {
+  if (!confirm("Delete this entry?")) return;
+  const photoId = removeHistoryEntry(vehicleId, itemId, entryId);
+  if (photoId) { try { await deletePhotoBlob(photoId); } catch (e) { console.error(e); } }
+  render();
+}
+function editHistoryEntry(vehicleId, itemId, entryId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = v.maintenanceItems.find(i => i.id === itemId);
+  const entry = (item.history || []).find(h => h.id === entryId);
+  showDialog(`
+    <h3>Edit entry — ${escapeHtml(item.name)}</h3>
+    <label>Date performed</label>
+    <input id="f-edithistdate" type="date" value="${entry.date || ""}" />
+    <label>Mileage at time of service</label>
+    <input id="f-edithistmiles" type="number" value="${entry.mileage != null ? entry.mileage : ""}" />
+    <label>Cost (optional)</label>
+    <input id="f-edithistcost" type="number" step="0.01" value="${entry.cost != null ? entry.cost : ""}" />
+    <label>Notes (optional)</label>
+    <textarea id="f-edithistnotes">${escapeHtml(entry.notes || "")}</textarea>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="confirmEditHistoryEntry('${vehicleId}','${itemId}','${entryId}')">Save</button>
+    </div>
+  `);
+}
+function confirmEditHistoryEntry(vehicleId, itemId, entryId) {
+  const v = state.vehicles.find(v => v.id === vehicleId);
+  const item = v.maintenanceItems.find(i => i.id === itemId);
+  const entry = (item.history || []).find(h => h.id === entryId);
+  entry.date = document.getElementById("f-edithistdate").value || entry.date;
+  const milesRaw = document.getElementById("f-edithistmiles").value;
+  entry.mileage = milesRaw ? parseInt(milesRaw, 10) : null;
+  const costRaw = document.getElementById("f-edithistcost").value;
+  entry.cost = costRaw ? parseFloat(costRaw) : null;
+  entry.notes = document.getElementById("f-edithistnotes").value.trim();
+  // If this was the most recent entry, keep the item's own last-done fields in sync.
+  const mostRecent = (item.history || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+  if (mostRecent && mostRecent.id === entryId) {
+    item.lastServiceDate = entry.date;
+    item.lastServiceMileage = entry.mileage;
+  }
+  saveData();
+  closeDialog();
+  render();
+  showToast("✓ Entry updated.");
 }
 function logService(vehicleId, itemId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
@@ -1117,19 +1184,30 @@ function addDefaultTemplates(vehicleId) {
   const templates = v.type === "Motorcycle" ? DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE
     : isHondaCRV(v) ? DEFAULT_MAINTENANCE_TEMPLATES_HONDA_CRV_GEN3
     : DEFAULT_MAINTENANCE_TEMPLATES;
+  // Idempotent by name so this can be clicked again later to top up any missing standard
+  // items (e.g. after adding a few individually) without ever creating duplicate items.
+  const existingNames = new Set(v.maintenanceItems.map(i => i.name.trim().toLowerCase()));
+  let added = 0;
   templates.forEach(t => {
+    if (existingNames.has(t.name.trim().toLowerCase())) return;
     // Snap to the most recent point in this item's cycle at or below the current
     // mileage, rather than assuming everything was just serviced today — so a
     // used vehicle's schedule reflects where it actually sits in the cycle.
     const lastServiceMileage = t.intervalMiles
       ? Math.floor(v.mileage / t.intervalMiles) * t.intervalMiles
       : v.mileage;
+    const lastServiceDate = todayISO();
     v.maintenanceItems.push({
       id: uid(), name: t.name, intervalMiles: t.intervalMiles, intervalMonths: t.intervalMonths,
-      lastServiceDate: todayISO(), lastServiceMileage, warrantyId: null,
+      lastServiceDate, lastServiceMileage, warrantyId: null,
+      // A real (editable/deletable) history entry, not just a bare lastServiceDate field, so
+      // this seeded baseline shows up in the Done feed like any other logged completion.
+      history: [{ id: uid(), date: lastServiceDate, mileage: lastServiceMileage, cost: null, notes: "Seeded as already up to date when common maintenance defaults were added.", photoId: null }],
     });
+    added++;
   });
   saveData();
+  showToast(added > 0 ? `Added ${added} common maintenance item${added === 1 ? "" : "s"}.` : "You already have all the common items for this vehicle.");
   render();
 }
 
@@ -1465,6 +1543,10 @@ function renderHouseholdDoneFeed(personalOnly) {
       <div>
         <div class="item-name">${escapeHtml(item.name)} — ${escapeHtml(task.task_name)}</div>
         <div class="item-detail">${h.completed_date || "—"}${h.method ? " &middot; " + (methodLabel[h.method] || h.method) : ""}${h.cost != null ? " &middot; $" + h.cost.toFixed(2) : ""}${h.note ? " — " + escapeHtml(h.note).slice(0, 120) : ""}</div>
+      </div>
+      <div class="item-actions">
+        <button class="small" onclick="editHouseholdHistoryEntry('${item.id}','${task.id}','${h.id}')">Edit</button>
+        <button class="small danger" onclick="deleteHouseholdHistoryEntryFromDone('${item.id}','${task.id}','${h.id}')">Delete</button>
       </div>
     </div>`).join("");
 }
@@ -1843,6 +1925,7 @@ function openHouseholdTaskHistory(itemId, taskId) {
         <div class="item-detail">${h.cost != null ? "$" + h.cost.toFixed(2) + " &middot; " : ""}${h.note ? escapeHtml(h.note) : ""}</div>
       </div>
       <div class="item-actions">
+        <button class="small" onclick="editHouseholdHistoryEntry('${itemId}','${taskId}','${h.id}')">Edit</button>
         <button class="small danger" onclick="deleteHouseholdHistoryEntry('${itemId}','${taskId}','${h.id}')">Delete</button>
       </div>
     </div>`).join("") || `<p class="vehicle-meta">No history yet.</p>`;
@@ -1854,6 +1937,54 @@ function deleteHouseholdHistoryEntry(itemId, taskId, entryId) {
   task.history = (task.history || []).filter(h => h.id !== entryId);
   saveHouseholdData();
   openHouseholdTaskHistory(itemId, taskId);
+}
+function deleteHouseholdHistoryEntryFromDone(itemId, taskId, entryId) {
+  if (!confirm("Delete this entry?")) return;
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  task.history = (task.history || []).filter(h => h.id !== entryId);
+  saveHouseholdData();
+  render();
+}
+function editHouseholdHistoryEntry(itemId, taskId, entryId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  const entry = task.history.find(h => h.id === entryId);
+  showDialog(`
+    <h3>Edit entry — ${escapeHtml(task.task_name)}</h3>
+    <label>Date completed</label>
+    <input id="f-h-edithistdate" type="date" value="${entry.completed_date || ""}" />
+    <label>Method</label>
+    <select id="f-h-edithistmethod">
+      <option value="diy" ${entry.method === "diy" ? "selected" : ""}>DIY</option>
+      <option value="professional" ${entry.method === "professional" ? "selected" : ""}>Professional</option>
+      <option value="reported_to_hoa" ${entry.method === "reported_to_hoa" ? "selected" : ""}>Reported to HOA</option>
+    </select>
+    <label>Cost (optional)</label>
+    <input id="f-h-edithistcost" type="number" step="0.01" value="${entry.cost != null ? entry.cost : ""}" />
+    <label>Note (optional)</label>
+    <textarea id="f-h-edithistnote">${escapeHtml(entry.note || "")}</textarea>
+    <div class="dialog-actions">
+      <button onclick="closeDialog()">Cancel</button>
+      <button class="primary" onclick="confirmEditHouseholdHistoryEntry('${itemId}','${taskId}','${entryId}')">Save</button>
+    </div>
+  `);
+}
+function confirmEditHouseholdHistoryEntry(itemId, taskId, entryId) {
+  const item = householdState.items.find(i => i.id === itemId);
+  const task = item.tasks.find(t => t.id === taskId);
+  const entry = task.history.find(h => h.id === entryId);
+  entry.completed_date = document.getElementById("f-h-edithistdate").value || entry.completed_date;
+  entry.method = document.getElementById("f-h-edithistmethod").value;
+  const costRaw = document.getElementById("f-h-edithistcost").value;
+  entry.cost = costRaw ? parseFloat(costRaw) : null;
+  entry.note = document.getElementById("f-h-edithistnote").value.trim();
+  const mostRecent = task.history.slice().sort((a, b) => (b.completed_date || "").localeCompare(a.completed_date || ""))[0];
+  if (mostRecent && mostRecent.id === entryId) task.last_completed_date = entry.completed_date;
+  saveHouseholdData();
+  closeDialog();
+  render();
+  showToast("✓ Entry updated.");
 }
 
 /* ---------------- Notifications ---------------- */
