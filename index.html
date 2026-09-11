@@ -595,14 +595,74 @@ function renderDashboard() {
   app.innerHTML = html;
 }
 
+function itemUrgencyKey(s) {
+  if (s.daysRemaining !== null) return s.daysRemaining;
+  if (s.milesRemaining !== null) return s.milesRemaining;
+  return Infinity;
+}
+function renderMaintenanceItemRow(item, s, v, warranties) {
+  const badgeCls = s.status;
+  const badgeLabel = s.status === "bad" ? "Overdue" : s.status === "warn" ? "Due soon" : "OK";
+  let detailParts = [];
+  if (s.nextDueMiles !== null) detailParts.push(`next at ${s.nextDueMiles.toLocaleString()} mi`);
+  if (s.nextDueDate !== null) detailParts.push(s.isManualReminder ? `reminder set for ${s.nextDueDate}` : `by ${s.nextDueDate}`);
+  const linkedWarranty = warranties.find(w => w.id === item.warrantyId);
+  let warrantyNote = "";
+  if (linkedWarranty && (s.status === "bad" || s.status === "warn")) {
+    const ws = warrantyStatus(linkedWarranty, v);
+    if (ws.active) {
+      warrantyNote = `<div class="warranty-note">⚠️ May be covered under "${escapeHtml(linkedWarranty.name)}" warranty (${escapeHtml(linkedWarranty.provider || "")}) — check before paying out of pocket.</div>`;
+    }
+  }
+  const calLink = googleCalendarLink(item, s, v);
+  return `<div class="item-row">
+    <div>
+      <div class="item-name">${escapeHtml(item.name)}</div>
+      <div class="item-detail">${detailParts.join(" &middot; ") || "no schedule set"}${item.lastServiceDate ? ` &middot; last done ${item.lastServiceDate}` : ""}</div>
+      ${warrantyNote}
+    </div>
+    <div class="item-actions">
+      <span class="badge ${badgeCls}">${badgeLabel}</span>
+      ${calLink ? `<a class="btn small" target="_blank" href="${calLink}">📅 Add reminder</a>` : ""}
+      <button class="small" onclick="logService('${v.id}','${item.id}')">Log done</button>
+      <button class="small" onclick="openHistory('${v.id}','${item.id}')">History (${(item.history || []).length})</button>
+      <button class="small" onclick="openMaintenanceForm('${v.id}','${item.id}')">Edit</button>
+      <button class="small danger" onclick="deleteMaintenance('${v.id}','${item.id}')">Delete</button>
+    </div>
+  </div>`;
+}
+function renderVehicleDoneFeed(v) {
+  const entries = [];
+  (v.maintenanceItems || []).forEach(item => {
+    (item.history || []).forEach(h => entries.push({ item, h }));
+  });
+  entries.sort((a, b) => (b.h.date || "").localeCompare(a.h.date || ""));
+  const recent = entries.slice(0, 15);
+  if (recent.length === 0) return `<p class="vehicle-meta">Nothing logged yet.</p>`;
+  return recent.map(({ item, h }) => `
+    <div class="item-row">
+      <div>
+        <div class="item-name">${escapeHtml(item.name)}</div>
+        <div class="item-detail">${h.date || "—"}${h.mileage != null ? ` &middot; ${h.mileage.toLocaleString()} mi` : ""}${h.cost != null ? ` &middot; $${h.cost.toFixed(2)}` : ""}${h.notes ? ` — ${escapeHtml(h.notes).slice(0, 120)}` : ""}</div>
+      </div>
+      <div class="item-actions">
+        ${h.photoId ? `<button class="small" onclick="viewPhoto('${h.photoId}')">📷 View</button>` : ""}
+      </div>
+    </div>`).join("");
+}
+
 function renderVehicleDetail(v) {
   const items = v.maintenanceItems || [];
   const warranties = v.warranties || [];
 
-  const itemsSorted = items.map(item => ({ item, s: computeItemStatus(item, v) }))
+  const statused = items.map(item => ({ item, s: computeItemStatus(item, v) }));
+  const pending = statused.filter(x => x.s.status === "bad")
+    .sort((a, b) => itemUrgencyKey(a.s) - itemUrgencyKey(b.s));
+  const upcoming = statused.filter(x => x.s.status !== "bad")
     .sort((a, b) => {
-      const order = { bad: 0, warn: 1, ok: 2 };
-      return order[a.s.status] - order[b.s.status];
+      const order = { warn: 0, ok: 1 };
+      const oc = order[a.s.status] - order[b.s.status];
+      return oc !== 0 ? oc : itemUrgencyKey(a.s) - itemUrgencyKey(b.s);
     });
 
   let html = `<span class="back-link" onclick="goHome()">&larr; All vehicles</span>
@@ -627,49 +687,26 @@ function renderVehicleDetail(v) {
   <div class="section-title">
     <h3>Maintenance</h3>
     <button class="small primary" onclick="openMaintenanceForm('${v.id}')">+ Add item</button>
-  </div>
-  <div class="card">`;
+  </div>`;
 
-  if (itemsSorted.length === 0) {
+  if (items.length === 0) {
     const templateLabel = v.type === "Motorcycle" ? "motorcycle "
       : isHondaCRV(v) ? "Honda CR-V "
       : "";
-    html += `<p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults.</p>
-      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common ${templateLabel}maintenance items</button>`;
+    html += `<div class="card">
+      <p class="vehicle-meta">No maintenance items yet. Add one, or add all common defaults.</p>
+      <button class="small" onclick="addDefaultTemplates('${v.id}')">+ Add common ${templateLabel}maintenance items</button>
+    </div>`;
   } else {
-    itemsSorted.forEach(({ item, s }) => {
-      const badgeCls = s.status;
-      const badgeLabel = s.status === "bad" ? "Overdue" : s.status === "warn" ? "Due soon" : "OK";
-      let detailParts = [];
-      if (s.nextDueMiles !== null) detailParts.push(`next at ${s.nextDueMiles.toLocaleString()} mi`);
-      if (s.nextDueDate !== null) detailParts.push(s.isManualReminder ? `reminder set for ${s.nextDueDate}` : `by ${s.nextDueDate}`);
-      const linkedWarranty = warranties.find(w => w.id === item.warrantyId);
-      let warrantyNote = "";
-      if (linkedWarranty && (s.status === "bad" || s.status === "warn")) {
-        const ws = warrantyStatus(linkedWarranty, v);
-        if (ws.active) {
-          warrantyNote = `<div class="warranty-note">⚠️ May be covered under "${escapeHtml(linkedWarranty.name)}" warranty (${escapeHtml(linkedWarranty.provider || "")}) — check before paying out of pocket.</div>`;
-        }
-      }
-      const calLink = googleCalendarLink(item, s, v);
-      html += `<div class="item-row">
-        <div>
-          <div class="item-name">${escapeHtml(item.name)}</div>
-          <div class="item-detail">${detailParts.join(" &middot; ") || "no schedule set"}${item.lastServiceDate ? ` &middot; last done ${item.lastServiceDate}` : ""}</div>
-          ${warrantyNote}
-        </div>
-        <div class="item-actions">
-          <span class="badge ${badgeCls}">${badgeLabel}</span>
-          ${calLink ? `<a class="btn small" target="_blank" href="${calLink}">📅 Add reminder</a>` : ""}
-          <button class="small" onclick="logService('${v.id}','${item.id}')">Log done</button>
-          <button class="small" onclick="openHistory('${v.id}','${item.id}')">History (${(item.history || []).length})</button>
-          <button class="small" onclick="openMaintenanceForm('${v.id}','${item.id}')">Edit</button>
-          <button class="small danger" onclick="deleteMaintenance('${v.id}','${item.id}')">Delete</button>
-        </div>
-      </div>`;
-    });
+    html += `<div class="section-title"><h3>⚠️ Pending${pending.length ? ` (${pending.length})` : ""}</h3></div>
+    <div class="card">${pending.length ? pending.map(({ item, s }) => renderMaintenanceItemRow(item, s, v, warranties)).join("") : `<p class="vehicle-meta">Nothing overdue right now 🎉</p>`}</div>
+
+    <div class="section-title"><h3>📅 Upcoming${upcoming.length ? ` (${upcoming.length})` : ""}</h3></div>
+    <div class="card">${upcoming.length ? upcoming.map(({ item, s }) => renderMaintenanceItemRow(item, s, v, warranties)).join("") : `<p class="vehicle-meta">Nothing else scheduled.</p>`}</div>
+
+    <div class="section-title"><h3>✅ Done</h3></div>
+    <div class="card">${renderVehicleDoneFeed(v)}</div>`;
   }
-  html += `</div>`;
 
   html += `<div class="section-title">
     <h3>Warranties</h3>
@@ -891,6 +928,7 @@ async function viewPhoto(photoId) {
 }
 
 /* ---------------- Maintenance item form ---------------- */
+let currentMaintenanceTemplates = [];
 function openMaintenanceForm(vehicleId, itemId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
   const item = itemId ? v.maintenanceItems.find(i => i.id === itemId) : null;
@@ -898,8 +936,20 @@ function openMaintenanceForm(vehicleId, itemId) {
     `<option value="${w.id}" ${item && item.warrantyId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`
   ).join("");
 
+  currentMaintenanceTemplates = v.type === "Motorcycle" ? DEFAULT_MAINTENANCE_TEMPLATES_MOTORCYCLE
+    : isHondaCRV(v) ? DEFAULT_MAINTENANCE_TEMPLATES_HONDA_CRV_GEN3
+    : DEFAULT_MAINTENANCE_TEMPLATES;
+  const presetPicker = !item ? `
+    <label>Starting point</label>
+    <select id="f-preset" onchange="applyMaintenancePreset()">
+      <option value="">-- Custom (blank) --</option>
+      ${currentMaintenanceTemplates.map((t, idx) => `<option value="${idx}">${escapeHtml(t.name)}</option>`).join("")}
+    </select>
+  ` : "";
+
   showDialog(`
     <h3>${item ? "Edit" : "Add"} maintenance item</h3>
+    ${presetPicker}
     <label>Name</label>
     <input id="f-name" value="${item ? escapeHtml(item.name) : ""}" placeholder="e.g. Oil change" />
     <div class="row">
@@ -923,6 +973,14 @@ function openMaintenanceForm(vehicleId, itemId) {
       <button class="primary" onclick="saveMaintenanceForm('${vehicleId}'${item ? `,'${item.id}'` : ""})">Save</button>
     </div>
   `);
+}
+function applyMaintenancePreset() {
+  const idx = document.getElementById("f-preset").value;
+  if (idx === "") return;
+  const t = currentMaintenanceTemplates[idx];
+  document.getElementById("f-name").value = t.name;
+  document.getElementById("f-intmiles").value = t.intervalMiles || "";
+  document.getElementById("f-intmonths").value = t.intervalMonths || "";
 }
 function saveMaintenanceForm(vehicleId, itemId) {
   const v = state.vehicles.find(v => v.id === vehicleId);
@@ -1390,6 +1448,27 @@ function renderTaskRow({ item, task, status }, opts = {}) {
   </div>`;
 }
 
+function renderHouseholdDoneFeed(personalOnly) {
+  const entries = [];
+  householdState.items.forEach(item => {
+    if (personalOnly && item.responsibility !== "personal") return;
+    (item.tasks || []).forEach(task => {
+      (task.history || []).forEach(h => entries.push({ item, task, h }));
+    });
+  });
+  entries.sort((a, b) => (b.h.completed_date || "").localeCompare(a.h.completed_date || ""));
+  const recent = entries.slice(0, 15);
+  if (recent.length === 0) return `<p class="vehicle-meta">Nothing logged yet.</p>`;
+  const methodLabel = { diy: "DIY", professional: "Professional", reported_to_hoa: "Reported to HOA" };
+  return recent.map(({ item, task, h }) => `
+    <div class="item-row">
+      <div>
+        <div class="item-name">${escapeHtml(item.name)} — ${escapeHtml(task.task_name)}</div>
+        <div class="item-detail">${h.completed_date || "—"}${h.method ? " &middot; " + (methodLabel[h.method] || h.method) : ""}${h.cost != null ? " &middot; $" + h.cost.toFixed(2) : ""}${h.note ? " — " + escapeHtml(h.note).slice(0, 120) : ""}</div>
+      </div>
+    </div>`).join("");
+}
+
 function renderHouseholdList() {
   let html = `<div class="sub-tabs">
     <button class="sub-tab-btn ${currentHouseholdView === "todo" ? "active" : ""}" onclick="switchHouseholdView('todo')">My To-Do</button>
@@ -1400,7 +1479,10 @@ function renderHouseholdList() {
     <button class="small" onclick="requestHouseholdNotifications()">🔔 Enable reminders</button>
   </div>`;
 
-  const rows = allHouseholdTaskRows({ personalOnly: currentHouseholdView === "todo" });
+  const personalOnly = currentHouseholdView === "todo";
+  const rows = allHouseholdTaskRows({ personalOnly });
+  const pending = rows.filter(r => r.status.bucket === "overdue");
+  const upcoming = rows.filter(r => r.status.bucket !== "overdue");
 
   if (householdState.items.length === 0) {
     html += `<div class="empty card">
@@ -1410,7 +1492,15 @@ function renderHouseholdList() {
   } else if (rows.length === 0) {
     html += `<div class="empty card"><p>${currentHouseholdView === "todo" ? "Nothing on your personal to-do list right now." : "No tracked tasks yet."}</p></div>`;
   } else {
-    html += rows.map(r => renderTaskRow(r, { awarenessOnly: currentHouseholdView === "overview" })).join("");
+    const awarenessOnly = currentHouseholdView === "overview";
+    html += `<div class="section-title"><h3>⚠️ Pending${pending.length ? ` (${pending.length})` : ""}</h3></div>
+    ${pending.length ? pending.map(r => renderTaskRow(r, { awarenessOnly })).join("") : `<div class="card"><p class="vehicle-meta">Nothing overdue right now 🎉</p></div>`}
+
+    <div class="section-title"><h3>📅 Upcoming${upcoming.length ? ` (${upcoming.length})` : ""}</h3></div>
+    ${upcoming.length ? upcoming.map(r => renderTaskRow(r, { awarenessOnly })).join("") : `<div class="card"><p class="vehicle-meta">Nothing else scheduled.</p></div>`}
+
+    <div class="section-title"><h3>✅ Done</h3></div>
+    <div class="card">${renderHouseholdDoneFeed(personalOnly)}</div>`;
   }
 
   if (currentHouseholdView === "overview") {
